@@ -81,6 +81,15 @@ const MEDIA_ITEM_LABELS = new Map([
 /** How many media items one message may carry in. */
 const MAX_MEDIA_PER_MESSAGE = 3
 
+/**
+ * Default and bounds for how long an inbound file waits for its follow-up text.
+ *
+ * Zero is allowed and means "do not wait": the file is delivered at once, with any
+ * text it arrived with. That is the off switch for the whole merge window.
+ */
+const DEFAULT_MEDIA_MERGE_SEC = 20
+const MAX_MEDIA_MERGE_SEC = 300
+
 /** Media items of one inbound message, in arrival order. */
 function mediaItemsOf(message) {
   const items = Array.isArray(message.item_list) ? message.item_list : []
@@ -373,6 +382,13 @@ export function createChannel(options) {
    * mean one thing.
    */
   const pendingQuestions = new Map()
+  /**
+   * conversationKey -> files held for their follow-up text.
+   *
+   * In memory only: a restart inside the window loses the file, which is the same
+   * outcome as the process being killed before the agent ran.
+   */
+  const contentBuffers = new Map()
 
   /**
    * Ring buffer of what this channel actually did.
@@ -672,6 +688,8 @@ export function createChannel(options) {
     // with a slash still works.
     const command = parseCommand(text)
     if (command && KNOWN_COMMANDS.has(command.name)) {
+      // A held file must not sit behind a command the user is waiting on.
+      await deliverBuffered(`${account.accountId}:${userId}`, '')
       note('command', `/${command.name} ${command.argument}`.trim())
       await handleCommand(
         account,
@@ -685,12 +703,54 @@ export function createChannel(options) {
       return
     }
 
-    const sessionId = await ensureSession(account, userId)
-    replyTargets.set(sessionId, {
-      accountId: account.accountId,
-      toUserId: userId,
-      contextToken: String(message.context_token || ''),
+    const sessionKey = `${account.accountId}:${userId}`
+    const contextToken = String(message.context_token || '')
+
+    // A file waits for the words that go with it.
+    //
+    // People send the picture, then type the request — three seconds later, five
+    // seconds later. Delivering on arrival makes the agent answer the picture
+    // instead of the request, and the request then arrives at a turn that has
+    // already spoken. A text inside the window is appended and the pair is
+    // delivered at once; silence means the window expires and the file goes alone.
+    if (mediaItems.length > 0) {
+      const mergeMs = (readState().mediaMergeSec ?? 20) * 1000
+      if (mergeMs > 0) {
+        queueContent(sessionKey, { account, userId, contextToken, text, mediaItems, signal, mergeMs })
+        return
+      }
+      // Window set to zero: the setting's off switch, delivered with any text it
+      // arrived with so a caption still travels with its picture.
+      await deliverToSession({ account, userId, contextToken, texts: [text], mediaItems, signal })
+      return
+    }
+
+    const held = contentBuffers.get(sessionKey)
+    if (held) {
+      // Text inside the window: the file and the request become one turn.
+      await deliverBuffered(sessionKey, text)
+      return
+    }
+
+    await deliverToSession({
+      account,
+      userId,
+      contextToken,
+      texts: [text],
+      mediaItems: [],
+      signal,
     })
+  }
+
+  /**
+   * Submit one turn: session, media, prompt layers.
+   *
+   * Extracted so the immediate path and the merged path cannot drift apart — the
+   * buffered version is the same delivery, one step later.
+   */
+  async function deliverToSession({ account, userId, contextToken, texts, mediaItems, signal }) {
+    const sessionId = await ensureSession(account, userId)
+    replyTargets.set(sessionId, { accountId: account.accountId, toUserId: userId, contextToken })
     note('session', sessionId)
 
     const bindingCwd =
@@ -705,14 +765,9 @@ export function createChannel(options) {
       }
     }
 
-    const content = [text, ...mediaNotes].filter((part) => part).join('\n\n')
+    const content = [...texts, ...mediaNotes].filter((part) => part).join('\n\n')
     if (!content) {
-      await sendReply(
-        account.accountId,
-        userId,
-        String(message.context_token || ''),
-        '媒体下载失败，这次没送进会话。',
-      )
+      await sendReply(account.accountId, userId, contextToken, '媒体下载失败，这次没送进会话。')
       return
     }
 
@@ -733,10 +788,59 @@ export function createChannel(options) {
         mode: 'queue',
         content: [{ type: 'text', text: body }],
       },
-      signal,
+      signal || new AbortController().signal,
     )
     note('prompt', 'accepted')
     clearError(account.accountId)
+  }
+
+  /** Hold a file (and any text that came with it) until the window closes. */
+  function queueContent(key, { account, userId, contextToken, text, mediaItems, signal, mergeMs }) {
+    let held = contentBuffers.get(key)
+    if (!held) {
+      held = {
+        account,
+        userId,
+        contextToken,
+        texts: [],
+        mediaItems: [],
+        signal: signal || new AbortController().signal,
+        timer: null,
+      }
+      contentBuffers.set(key, held)
+    }
+    if (text) held.texts.push(text)
+    held.mediaItems.push(...mediaItems)
+    if (signal) held.signal = signal
+    if (held.timer) clearTimeout(held.timer)
+    held.timer = setTimeout(() => {
+      void deliverBuffered(key, '')
+    }, mergeMs)
+    note('merge', `hold | ${held.mediaItems.length} media | ${held.texts.length} text | ${mergeMs}ms`)
+  }
+
+  /** Deliver whatever is held, optionally with one more piece of text. */
+  async function deliverBuffered(key, extraText) {
+    const held = contentBuffers.get(key)
+    if (!held) return
+    contentBuffers.delete(key)
+    if (held.timer) clearTimeout(held.timer)
+
+    const texts = [...held.texts]
+    if (extraText) texts.push(extraText)
+    note(
+      'merge',
+      `flush | ${held.mediaItems.length} media | ${texts.length} text${extraText ? ' (follow-up)' : ' (window expired)'}`,
+    )
+
+    await deliverToSession({
+      account: held.account,
+      userId: held.userId,
+      contextToken: held.contextToken,
+      texts,
+      mediaItems: held.mediaItems,
+      signal: held.signal,
+    })
   }
 
   /** Where a given session's answers go, when this channel owns that session. */
@@ -1225,6 +1329,9 @@ export function createChannel(options) {
     pendingApprovals.clear()
     for (const entry of [...pendingQuestions.values()]) entry.finish({ answers: [] })
     pendingQuestions.clear()
+    // A held file would otherwise be dropped in silence when the row unloads. It is
+    // delivered now, without waiting for a window that will never expire.
+    for (const key of [...contentBuffers.keys()]) void deliverBuffered(key, '')
   }
 
   function snapshot() {
@@ -1239,6 +1346,7 @@ export function createChannel(options) {
       activeSessions: replyTargets.size,
       pendingApprovals: pendingApprovals.size,
       pendingQuestions: pendingQuestions.size,
+      pendingMerges: contentBuffers.size,
       events: events.slice(-24),
     }
   }

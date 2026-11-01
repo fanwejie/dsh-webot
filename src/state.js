@@ -30,6 +30,16 @@ import { DEFAULT_CHANNEL_PROMPT, DEFAULT_PERSONA_PROMPT, MAX_PROMPT_CHARS } from
 const STATE_VERSION = 1
 const MAX_ACCOUNTS = 5
 
+/** Merge window bounds: zero disables waiting, and the cap keeps it a window. */
+const DEFAULT_MEDIA_MERGE_SEC = 20
+const MAX_MEDIA_MERGE_SEC = 300
+
+function clampMergeSeconds(value) {
+  const seconds = Number(value)
+  if (!Number.isFinite(seconds)) return DEFAULT_MEDIA_MERGE_SEC
+  return Math.min(MAX_MEDIA_MERGE_SEC, Math.max(0, Math.round(seconds)))
+}
+
 /**
  * Accepted values of `approvalMode`.
  *
@@ -140,6 +150,8 @@ export function normalizeState(raw) {
     // permission prompt blocks the agent turn, so an unanswered one is a stalled
     // machine; refusing is the safe default and the user can always re-ask.
     approvalTimeoutSec: clampTimeout(source.approvalTimeoutSec),
+    // How long an inbound file waits for the sentence that explains it.
+    mediaMergeSec: clampMergeSeconds(source.mediaMergeSec),
     // `undefined` means "never set", which takes the default; an empty string is
     // a deliberate "off" and stays empty, the same distinction the reference makes
     // with `stored.presenceNote ?? DEFAULT_SETTINGS.presenceNote`.

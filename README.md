@@ -290,6 +290,27 @@ empty selections.
 
 ## Media
 
+### A file waits for the sentence that explains it
+
+People send the picture, then type the request — three seconds later, five seconds
+later. Delivering on arrival makes the agent answer the picture instead of the
+request, and the request then lands in a turn that has already spoken.
+
+So an inbound file is **held for `mediaMergeSec` seconds** (default 20, 0–300,
+editable in the panel):
+
+- text arriving inside the window is appended and the pair is delivered at once;
+- more files inside the window join the same hold, and each one restarts it;
+- silence means the window expires and the file goes on its own;
+- `0` disables the wait entirely — the file is delivered immediately, still
+  together with any text that arrived with it.
+
+The hold is in memory. A restart inside the window loses the file, which is the
+same outcome as the process dying before the agent ever ran.
+
+Commands flush the hold first, so `/list` right after a screenshot is not stuck
+behind it. A held file is also delivered on unload rather than dropped.
+
 Inbound works: an image, file, video or voice note is downloaded from the CDN,
 AES-128-ECB decrypted, and saved under `media/inbound/` inside the session's
 workspace. The prompt then carries the relative path:

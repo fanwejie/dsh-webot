@@ -431,8 +431,42 @@ window.__ModuleLoader__.load({
       const [picker, setPicker] = React.useState(false)
       const [sessions, setSessions] = React.useState({ phase: 'idle' })
       const [bindError, setBindError] = React.useState('')
-      // `null` means "not editing": the box shows the saved value. While editing
-      // it holds exactly what was typed, including the empty string — a controlled
+      const [mergeDraft, setMergeDraft] = React.useState(null)
+
+      /** Commit the merge-window draft; same contract as the timeout field. */
+      function commitMerge() {
+        if (mergeDraft === null) return
+        const raw = String(mergeDraft).trim()
+        if (raw === '') {
+          setMergeDraft(null)
+          return
+        }
+        const seconds = Number(raw)
+        if (!Number.isFinite(seconds)) {
+          setMergeDraft(null)
+          return
+        }
+        const clamped = Math.min(300, Math.max(0, Math.round(seconds)))
+        setMergeDraft(String(clamped))
+        setBindError('')
+        post(SETTINGS_URL, { mediaMergeSec: clamped })
+          .then((body) => {
+            if (!body || body.ok !== true) {
+              setBindError((body && body.error) || t('bind.failed'))
+              setMergeDraft(null)
+              return
+            }
+            refreshStatus()
+            setMergeDraft(null)
+          })
+          .catch((error) => {
+            setBindError((error && error.message) || String(error))
+            setMergeDraft(null)
+          })
+      }
+
+      // `null` means "not editing": the box shows the saved value. While editing it
+      // holds exactly what was typed, including the empty string — a controlled
       // input that falls back to the saved value whenever the draft is empty can
       // never be cleared, which is why editing 30 down to 5 needed a workaround.
       const [timeoutDraft, setTimeoutDraft] = React.useState(null)
@@ -742,6 +776,30 @@ window.__ModuleLoader__.load({
             }),
             h('span', { style: { ...MUTED, margin: 0 } }, t('approval.timeoutUnit')),
           ),
+          h(
+            'div',
+            { style: { ...FIELD_ROW, alignItems: 'center' } },
+            h('span', { style: FIELD_NAME }, t('merge.label')),
+            h('input', {
+              type: 'number',
+              min: 0,
+              max: 300,
+              value:
+                mergeDraft === null ? String(status.data.mediaMergeSec ?? 20) : mergeDraft,
+              onChange: (event) => setMergeDraft(event.target.value),
+              onBlur: commitMerge,
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  event.currentTarget.blur()
+                }
+              },
+              'aria-label': t('merge.label'),
+              style: { ...TEXT_INPUT, width: '80px', letterSpacing: 'normal' },
+            }),
+            h('span', { style: { ...MUTED, margin: 0 } }, t('merge.unit')),
+          ),
+          h('p', { style: MUTED }, t('merge.hint')),
           h('p', { style: MUTED }, t('approval.hint')),
           h(
             'div',
@@ -1097,6 +1155,9 @@ window.__ModuleLoader__.load({
         '两者不能同时生效：请求只有一个归属，如果两边都开，输的那一边会在界面上留下一个关不掉的弹窗——宿主没有撤回接口。',
       'approval.timeout': '超时',
       'approval.timeoutUnit': '秒（5–300）内没回复就自动拒绝',
+      'merge.label': '文件合并',
+      'merge.unit': '秒内追加的文字会跟文件一起发',
+      'merge.hint': '发图/文件后等这么多秒：期间你打字就并成一条发给 agent，没打就等到点再发。填 0 = 不等，立刻发。',
       'persona.heading': '提示词与人设',
       'persona.channelLabel': '场合提示词（每条消息都会追加）',
       'persona.personaLabel': '人设提示词（每条消息都会追加）',
@@ -1180,6 +1241,10 @@ window.__ModuleLoader__.load({
         'These cannot both be on. A request has exactly one owner, and if both sides are started the loser leaves a dialog on screen that nothing can close — the host has no withdraw call.',
       'approval.timeout': 'Timeout',
       'approval.timeoutUnit': 'seconds (5–300) before an automatic reject',
+      'merge.label': 'File merge',
+      'merge.unit': 'seconds to wait for your follow-up text',
+      'merge.hint':
+        'After a file: text you type within this window is sent together with it; silence sends the file on its own. 0 = never wait.',
       'persona.heading': 'Prompts and persona',
       'persona.channelLabel': 'Channel prompt (appended to every message)',
       'persona.personaLabel': 'Persona prompt (appended to every message)',

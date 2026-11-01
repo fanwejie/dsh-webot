@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.12.3'
+const VERSION = '0.13.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -122,6 +122,7 @@ function readStatus() {
     binding: readBinding(state),
     approvalMode: state.approvalMode || 'phone',
     approvalTimeoutSec: state.approvalTimeoutSec || 30,
+    mediaMergeSec: state.mediaMergeSec,
     channelPrompt: state.channelPrompt,
     personaPrompt: state.personaPrompt,
     // Shipped defaults, so the panel can offer "restore" without a second route.
@@ -471,6 +472,14 @@ export function apply(ctx) {
         patch.approvalTimeoutSec = Math.round(seconds)
       }
 
+      if (payload && payload.mediaMergeSec !== undefined) {
+        const seconds = Number(payload.mediaMergeSec)
+        if (!Number.isFinite(seconds) || seconds < 0 || seconds > 300) {
+          return json({ ok: false, error: 'mediaMergeSec 需在 0–300 秒之间' }, 400)
+        }
+        patch.mediaMergeSec = Math.round(seconds)
+      }
+
       // Both prompt layers are free text. An empty string is stored as-is and
       // means "off" — it is not silently replaced by the default, or the field
       // could never be cleared.
@@ -492,6 +501,7 @@ export function apply(ctx) {
         ok: true,
         approvalMode: next.approvalMode,
         approvalTimeoutSec: next.approvalTimeoutSec,
+        mediaMergeSec: next.mediaMergeSec,
         channelPrompt: next.channelPrompt,
         personaPrompt: next.personaPrompt,
       })
