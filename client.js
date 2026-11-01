@@ -606,6 +606,151 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * The scenario picker, drawn rather than delegated to a native `<select>`.
+     *
+     * A native select popup is painted by the platform: its corners cannot be
+     * rounded and its options do not reliably take a background colour. Since the
+     * list is exactly what the user reads here, it is worth owning.
+     *
+     * Colours are tokens, not literals: on the dark theme `bg-base` reads as black
+     * and `bg-layer-1` as the lighter grey the selected row needs, and the same pair
+     * stays legible when someone runs a light theme.
+     */
+    function ScenarioSelect({ t, items, valueId, pendingId, disabled, onSelect }) {
+      const [open, setOpen] = React.useState(false)
+      const [box, setBox] = React.useState(null)
+      const triggerRef = React.useRef(null)
+      const selected = items.find((item) => item.id === valueId) || items[0]
+
+      const close = () => {
+        setOpen(false)
+        setBox(null)
+      }
+
+      /**
+       * Measured placement, not `absolute` inside the row: this row sits at the
+       * bottom of the panel, and an absolutely positioned list is clipped by the
+       * body's scroll container exactly there. Fixed coordinates also let the list
+       * flip above the trigger when the window has no room below.
+       */
+      const toggle = () => {
+        if (open) {
+          close()
+          return
+        }
+        const el = triggerRef.current
+        if (!el) return
+        const rect = el.getBoundingClientRect()
+        const below = window.innerHeight - rect.bottom - 8
+        const above = rect.top - 8
+        const flip = below < 160 && above > below
+        const available = flip ? above : below
+        setBox({
+          left: rect.left,
+          width: rect.width,
+          maxHeight: Math.min(260, Math.max(96, available - 4)),
+          top: flip ? undefined : rect.bottom + 4,
+          bottom: flip ? window.innerHeight - rect.top + 4 : undefined,
+        })
+        setOpen(true)
+      }
+
+      return h(
+        'div',
+        { style: { position: 'relative', flex: '0 1 360px', minWidth: '240px', maxWidth: '100%' } },
+        h(
+          'button',
+          {
+            ref: triggerRef,
+            type: 'button',
+            disabled: disabled === true,
+            'aria-haspopup': 'listbox',
+            'aria-expanded': open ? 'true' : 'false',
+            'aria-label': t('scenario.label'),
+            onClick: toggle,
+            style: {
+              ...SELECT,
+              display: 'flex',
+              alignItems: 'center',
+              gap: '8px',
+              width: '100%',
+              cursor: disabled ? 'default' : 'pointer',
+              textAlign: 'left',
+              borderRadius: 'var(--dsw-radius-md)',
+              opacity: disabled ? 0.5 : 1,
+            },
+          },
+          h(
+            'span',
+            { style: { flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
+            selected ? `${selected.name}${selected.id === pendingId ? ' ' + t('scenario.pending') : ''}` : '—',
+          ),
+          h('span', { style: { flex: '0 0 auto', opacity: 0.6 } }, '▾'),
+        ),
+        open && box
+          ? h('div', {
+              // Behind the list, above everything else: clicking anywhere else closes.
+              style: { position: 'fixed', inset: 0, zIndex: 1290 },
+              onClick: close,
+            })
+          : null,
+        open && box
+          ? h(
+              'div',
+              {
+                role: 'listbox',
+                style: {
+                  position: 'fixed',
+                  left: box.left + 'px',
+                  width: box.width + 'px',
+                  top: box.top === undefined ? undefined : box.top + 'px',
+                  bottom: box.bottom === undefined ? undefined : box.bottom + 'px',
+                  zIndex: 1300,
+                  padding: '4px',
+                  maxHeight: box.maxHeight + 'px',
+                  overflowY: 'auto',
+                  borderRadius: 'var(--dsw-radius-md)',
+                  border: '1px solid var(--dsw-alias-border-l2)',
+                  background: 'var(--dsw-alias-bg-base)',
+                  boxShadow: 'var(--dsw-elevation-prominent)',
+                },
+              },
+              items.map((item) => {
+                const isSelected = item.id === valueId
+                const isPending = item.id === pendingId
+                return h(
+                  'div',
+                  {
+                    key: item.id,
+                    role: 'option',
+                    'aria-selected': isSelected ? 'true' : 'false',
+                    onClick: () => {
+                      close()
+                      if (!isSelected) onSelect(item.id)
+                    },
+                    style: {
+                      padding: '6px 10px',
+                      borderRadius: 'var(--dsw-radius-sm)',
+                      cursor: 'pointer',
+                      fontSize: '12px',
+                      lineHeight: '18px',
+                      // Selected: the lighter surface. Everything else: the base, which
+                      // is black on the dark theme.
+                      background: isSelected ? 'var(--dsw-alias-bg-layer-1)' : 'transparent',
+                      color: isPending ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-label-primary)',
+                      fontWeight: isSelected ? 600 : 400,
+                      textDecoration: isPending ? 'line-through' : 'none',
+                    },
+                  },
+                  isPending ? `${item.name} ${t('scenario.pending')}` : item.name,
+                )
+              }),
+            )
+          : null,
+      )
+    }
+
     /* ------------------------------------------------------------------ *
      * The channel body: status, binding, and the QR handshake
      * ------------------------------------------------------------------ */
@@ -1216,40 +1361,14 @@ window.__ModuleLoader__.load({
               'div',
               { style: { ...FIELD_ROW, alignItems: 'center', marginTop: '10px' } },
               h('span', { style: FIELD_NAME }, t('scenario.label'), h(Hint, { t, text: t('scenario.hint') })),
-              h(
-                'select',
-                {
-                  value: active.id,
-                  disabled: status.data.channelPromptEnabled === false,
-                  onChange: (event) => postSettings({ activeScenarioId: event.target.value }),
-                  'aria-label': t('scenario.label'),
-                  style: {
-                    ...SELECT,
-                    // Longer than the shared select: scenario names are what the user
-                    // reads here, and a 220px box truncated them to "微信控制 …".
-                    flex: '0 1 360px',
-                    minWidth: '240px',
-                    maxWidth: '100%',
-                    opacity: status.data.channelPromptEnabled === false ? 0.5 : 1,
-                  },
-                },
-                scenarios.map((item) =>
-                  h(
-                    'option',
-                    {
-                      key: item.id,
-                      value: item.id,
-                      // Chromium honours option colours, which is the only way to grey a
-                      // single row of a native select without replacing the control.
-                      style:
-                        item.id === pendingDeleteId
-                          ? { color: 'var(--dsw-alias-label-secondary)' }
-                          : undefined,
-                    },
-                    item.id === pendingDeleteId ? `${item.name} ${t('scenario.pending')}` : item.name,
-                  ),
-                ),
-              ),
+              h(ScenarioSelect, {
+                t,
+                items: scenarios,
+                valueId: active.id,
+                pendingId: pendingDeleteId,
+                disabled: status.data.channelPromptEnabled === false,
+                onSelect: (id) => postSettings({ activeScenarioId: id }),
+              }),
               pendingDeleteId
                 ? h(Btn, { label: t('scenario.undo'), onClick: () => setPendingDeleteId(null) })
                 : h(Btn, {
