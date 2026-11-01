@@ -383,8 +383,18 @@ with every inbound message and expects it echoed on the reply; a send from a des
 session has never seen one. Without a token the gateway answers
 `ret=-2 prepare failed` rather than delivering, so the newest token per conversation
 is persisted in `state.json` (`contextTokens`) and used by both send paths. A
-`ret=-2` on a token-bearing send is retried once **without** the token, because a
-proactive message carrying none is accepted — that is the stale-token case.
+`ret=-2` on a token-bearing send is retried once **without** the token — the
+stale-token case.
+
+**The account is chosen by evidence, not list order.** Scanning the QR code twice
+leaves two bot accounts bound to the same user, and picking `accounts[0]` sends from
+a bot that user has never messaged — which the gateway also answers with
+`prepare failed`. The bound account holding a context token is one the user has
+actually talked to, so it wins.
+
+With no token at all, the send is refused before it is attempted and says what
+fixes it: send one message from WeChat first. That state is real — it is what the
+channel looks like right after a restart, before the first inbound message arrives.
 
 The send path logs before it attempts, not only on success:
 

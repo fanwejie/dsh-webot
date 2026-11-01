@@ -604,16 +604,23 @@ export function createChannel(options) {
    * session-scoped: claiming a desk session's prompt because it happens to run on
    * the same machine would send a dialog to a phone nobody is looking at, which is
    * the opposite of what that rule protects.
+   *
+   * The account is chosen by evidence, not by list order. Scanning twice leaves two
+   * bot accounts bound to the same user, and picking `accounts[0]` sends from a bot
+   * that user has never messaged — which the gateway answers with
+   * `ret=-2 prepare failed`. An account holding a context token is one that user
+   * has actually talked to, so it is preferred; a token is also what a proactive
+   * send needs at all.
    */
   function boundConversationTarget() {
     const state = readState()
-    const account = state.accounts[0]
-    if (!account) return undefined
+    const bound = state.accounts.filter(
+      (account) => state.bindings[`${account.accountId}:${account.userId}`],
+    )
+    if (bound.length === 0) return undefined
+    const account =
+      bound.find((entry) => state.contextTokens[`${entry.accountId}:${entry.userId}`]) || bound[0]
     const key = `${account.accountId}:${account.userId}`
-    if (!state.bindings[key]) return undefined
-    // The stored token is the whole point: a send from a desk session has never
-    // seen an inbound message, and without a token the gateway answers
-    // `ret=-2 prepare failed` instead of delivering.
     return {
       accountId: account.accountId,
       toUserId: account.userId,
@@ -664,6 +671,17 @@ export function createChannel(options) {
       'send-media',
       `target=${target.accountId}${direct ? '' : ' cross-session'} token=${target.contextToken ? 'yes' : 'none'} path=${resolved}`,
     )
+
+    // No token means this conversation has not been touched since the channel
+    // started (or since the feature shipped). The gateway answers such a send with
+    // `ret=-2 prepare failed`, so say what will actually fix it instead of
+    // forwarding that.
+    if (!target.contextToken) {
+      note('send-media', 'no-token | waiting for one inbound message')
+      throw new Error(
+        '微信会话令牌还没拿到，现在发不出去。先在微信里给机器人随便发一句话，再让我发——之后就正常了。',
+      )
+    }
 
     let result
     try {
