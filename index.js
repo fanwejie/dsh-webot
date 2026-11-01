@@ -1,70 +1,161 @@
 /**
- * dsh-webot — Host half (M1 skeleton).
+ * dsh-webot — Host half (M2).
  *
- * M1 owns exactly one thing: a status endpoint the settings panel can read, so the
- * button, the panel and the transport are all proven to work before any WeChat
- * protocol code exists.
+ * Serves the settings panel and owns the one QR login attempt at a time.
  *
- * The route is registered on the shared browser connection channel
- * (`ctx.connection.fetch`) rather than on the raw web server, so it inherits
- * Harness authentication, Host/Origin admission and the request middleware. A raw
- * `webServer.register` route would answer unauthenticated requests, which is not
- * acceptable for a channel that will later expose account state.
+ * Routes are registered on the shared browser connection channel
+ * (`ctx.connection.fetch`) rather than the raw web server, so they inherit
+ * Harness authentication. That matters here more than in M1: these routes return
+ * account identities and start a handshake that ends in a bot token.
  *
- * M2 replaces the constant body below with the real channel state (bound accounts,
- * long-poll liveness, last error). The wire shape is already the one the panel
- * reads, so the panel does not change at that point.
+ * Tokens never leave the Host. `/api/webot/status` reports each account with
+ * `hasToken: true` instead of the token itself, so a page that is merely
+ * authenticated cannot exfiltrate the channel's credentials.
  *
  * @module dsh-webot
  */
 
+import { createLoginTask } from './src/protocol/login.js'
+import { readState, stateFilePath, updateState } from './src/state.js'
+
 /** The row needs the browser connection channel to serve the panel. */
 export const inject = ['connection']
 
-/** Exact path the Client half reads. Kept in sync with `STATUS_URL` in client.js. */
-const STATUS_PATH = '/api/webot/status'
+const VERSION = '0.2.0'
 
-/** Plugin version reported to the panel; kept in sync with package.json. */
-const VERSION = '0.1.0'
+/** Phases after which a login attempt will never change again. */
+const TERMINAL_PHASES = new Set(['confirmed', 'failed', 'cancelled', 'already-bound'])
 
-/**
- * Build the status document.
- *
- * Every field is a fact the panel renders verbatim. `phase` is the channel's own
- * state machine value: `idle` until an account is bound, then `connected` /
- * `reconnecting` / `failed`. Only `idle` is reachable in M1.
- *
- * @returns the status wire shape.
- */
+/** The one live login attempt, or null between attempts. */
+let loginTask = null
+
+/** The status document the panel renders. Never includes a token. */
 function readStatus() {
+  const state = readState()
+  const bound = state.accounts.length > 0
   return {
     ok: true,
     plugin: 'dsh-webot',
     version: VERSION,
-    milestone: 'M1',
+    milestone: 'M2',
+    bound,
+    // No long poll exists until M3, so `connected` stays false and the panel
+    // reports "bound" instead of claiming a live link it does not have.
     connected: false,
-    needsLogin: false,
-    phase: 'idle',
-    accounts: [],
-    errors: [],
+    polling: false,
+    phase: bound ? 'bound' : 'idle',
+    accounts: state.accounts.map((account) => ({
+      accountId: account.accountId,
+      userId: account.userId,
+      baseUrl: account.baseUrl,
+      boundAt: account.boundAt,
+      hasToken: Boolean(account.token),
+    })),
+    errors: state.lastError ? [state.lastError.message] : [],
+    diagnostics: { statePath: stateFilePath() },
     checkedAt: new Date().toISOString(),
   }
 }
 
+function createTask() {
+  return createLoginTask({
+    onBound: async (account) => {
+      const current = readState()
+      const others = current.accounts.filter((entry) => entry.accountId !== account.accountId)
+      updateState({ accounts: [account, ...others], lastError: null })
+    },
+  })
+}
+
+/** Reuse a live attempt; replace one that already settled. */
+function taskForStart() {
+  if (loginTask && !TERMINAL_PHASES.has(loginTask.snapshot().phase)) return loginTask
+  loginTask = createTask()
+  return loginTask
+}
+
+function json(body, status = 200) {
+  return Response.json(body, { status })
+}
+
+function failure(error) {
+  return json({ ok: false, error: String((error && error.message) || error) }, 500)
+}
+
+async function readCode(request) {
+  try {
+    const payload = await request.json()
+    return typeof payload?.code === 'string' ? payload.code : ''
+  } catch {
+    return ''
+  }
+}
+
 /**
- * Register the status route for the plugin's lifetime.
+ * Register every route for the plugin's lifetime.
  *
  * @param ctx - the plugin context.
  */
 export function apply(ctx) {
+  const register = (path, methods, fetch) =>
+    ctx.effect(
+      () => ctx.connection.fetch.register({ path, methods, requestBody: 'buffered', fetch }),
+      `dsh-webot: ${path}`,
+    )
+
+  register('/api/webot/status', ['GET'], () => {
+    try {
+      return json(readStatus())
+    } catch (error) {
+      return failure(error)
+    }
+  })
+
+  register('/api/webot/login/start', ['POST'], async () => {
+    try {
+      const task = taskForStart()
+      const login = await task.start()
+      return json({ ok: true, login })
+    } catch (error) {
+      return failure(error)
+    }
+  })
+
+  register('/api/webot/login', ['GET'], () => {
+    try {
+      return json({ ok: true, login: loginTask ? loginTask.snapshot() : { phase: 'idle' } })
+    } catch (error) {
+      return failure(error)
+    }
+  })
+
+  register('/api/webot/login/verify', ['POST'], async (request) => {
+    try {
+      const code = await readCode(request)
+      if (!code) return json({ ok: false, error: '缺少 code' }, 400)
+      const accepted = loginTask ? loginTask.verify(code) : false
+      if (!accepted) return json({ ok: false, error: '当前没有等待配对码的登录' }, 409)
+      return json({ ok: true })
+    } catch (error) {
+      return failure(error)
+    }
+  })
+
+  register('/api/webot/login/cancel', ['POST'], () => {
+    try {
+      if (loginTask) loginTask.cancel()
+      loginTask = null
+      return json({ ok: true })
+    } catch (error) {
+      return failure(error)
+    }
+  })
+
   ctx.effect(
-    () =>
-      ctx.connection.fetch.register({
-        path: STATUS_PATH,
-        methods: ['GET'],
-        requestBody: 'buffered',
-        fetch: () => Response.json(readStatus()),
-      }),
-    'dsh-webot: status route',
+    () => () => {
+      if (loginTask) loginTask.cancel()
+      loginTask = null
+    },
+    'dsh-webot: stop the login attempt on unload',
   )
 }

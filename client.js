@@ -1,5 +1,5 @@
 /**
- * dsh-webot — Client half (M1 skeleton).
+ * dsh-webot — Client half (M2).
  *
  * One registration: the 「weBot设置」 action in `settings.action`, ordered right
  * after the shipped 「打开配置文件」 (id `open-document`, order 0), before Close.
@@ -12,8 +12,7 @@
  * (see `dsh-client-ui-settings-general`), so it is a body-level sibling that wins
  * the stacking comparison no matter how large a z-index an `#root` descendant
  * declares — the descendant is confined to `#root`'s own level. A panel mounted
- * there is *always* painted behind the settings dialog: the reported symptom was
- * a panel that only appeared after closing Settings.
+ * there is *always* painted behind the settings dialog.
  *
  * Rendering the panel from the header action's own subtree puts it inside the
  * dialog's `z-index:1000` stacking context, so `position: fixed` reaches the
@@ -23,10 +22,9 @@
  * ## Styling
  *
  * The button copies the host's `Button variant="outline" size="sm"` recipe from
- * `dsh-client-ui-primitives` byte for byte (28px, 12/18, `.5px` `border-l3`,
- * `radius-sm`, hover `interactive-bg-hover`) because the primitive itself must
- * not be imported. The panel copies the settings dialog's own geometry so it
- * reads as a sibling surface rather than a bolted-on window.
+ * `dsh-client-ui-primitives` because the primitive itself must not be imported.
+ * The panel copies the settings dialog's own geometry so it reads as a sibling
+ * surface rather than a bolted-on window.
  */
 window.__ModuleLoader__.load({
   id: 'dsh-webot',
@@ -34,7 +32,12 @@ window.__ModuleLoader__.load({
     const React = require('react')
     const h = React.createElement
     const NS = 'dsh-webot'
+
     const STATUS_URL = '/api/webot/status'
+    const LOGIN_URL = '/api/webot/login'
+    const LOGIN_START_URL = '/api/webot/login/start'
+    const LOGIN_VERIFY_URL = '/api/webot/login/verify'
+    const LOGIN_CANCEL_URL = '/api/webot/login/cancel'
     const TITLE_ID = 'webot-panel-title'
 
     /* ------------------------------------------------------------------ *
@@ -64,7 +67,8 @@ window.__ModuleLoader__.load({
     }
 
     /* ------------------------------------------------------------------ *
-     * Styles. Theme tokens only; literal colours appear in artwork only.
+     * Styles. Theme tokens only; literal colours appear in artwork and in the
+     * QR tile, which must stay light to stay scannable.
      * ------------------------------------------------------------------ */
 
     /** Host `Button` base + `size: 'sm'` + `variant: 'outline'`, copied. */
@@ -85,6 +89,14 @@ window.__ModuleLoader__.load({
       fontSize: '12px',
       lineHeight: '18px',
       whiteSpace: 'nowrap',
+    }
+
+    /** Same geometry, `variant: 'primary'`. */
+    const PRIMARY_BUTTON = {
+      ...ACTION_BUTTON,
+      border: 'none',
+      background: 'var(--dsw-alias-button-primary-fill)',
+      color: 'var(--dsw-alias-label-primary-foreground)',
     }
 
     /** Full-viewport layer, above the settings dialog that hosts it. */
@@ -164,6 +176,8 @@ window.__ModuleLoader__.load({
       color: 'var(--dsw-alias-label-primary)',
     }
 
+    const SECTION_TITLE = { margin: 0, fontSize: '13px', lineHeight: '20px', fontWeight: 600 }
+
     const FIELD_ROW = {
       display: 'flex',
       alignItems: 'baseline',
@@ -181,6 +195,346 @@ window.__ModuleLoader__.load({
       color: 'var(--dsw-alias-label-primary)',
       fontVariantNumeric: 'tabular-nums',
       wordBreak: 'break-all',
+    }
+
+    const PANEL_CARD = {
+      padding: '12px 14px',
+      borderRadius: 'var(--dsw-radius-md)',
+      background: 'var(--dsw-alias-bg-layer-1)',
+      border: '0.5px solid var(--dsw-alias-border-l1)',
+    }
+
+    const TEXT_INPUT = {
+      boxSizing: 'border-box',
+      height: '28px',
+      width: '140px',
+      padding: '0 8px',
+      borderRadius: 'var(--dsw-radius-sm)',
+      border: '0.5px solid var(--dsw-alias-border-l3)',
+      background: 'var(--dsw-alias-bg-base)',
+      color: 'var(--dsw-alias-label-primary)',
+      fontFamily: 'inherit',
+      fontSize: '12px',
+      lineHeight: '18px',
+      letterSpacing: '2px',
+    }
+
+    const MUTED = {
+      margin: '4px 0 0',
+      fontSize: '12px',
+      lineHeight: '18px',
+      color: 'var(--dsw-alias-label-secondary)',
+    }
+
+    /* ------------------------------------------------------------------ *
+     * Small shared pieces
+     * ------------------------------------------------------------------ */
+
+    /** Read a dictionary entry, answering '' when the key is missing (t echoes the key). */
+    function translate(t, key) {
+      const value = t(key)
+      return value === key ? '' : value
+    }
+
+    function field(name, value) {
+      return h(
+        'div',
+        { key: name, style: FIELD_ROW },
+        h('span', { style: FIELD_NAME }, name),
+        h('span', { style: FIELD_VALUE }, value),
+      )
+    }
+
+    /** A host-shaped button that knows its hover state. */
+    function Btn({ t, label, onClick, variant, disabled }) {
+      const [hover, setHover] = React.useState(false)
+      const base = variant === 'primary' ? PRIMARY_BUTTON : GHOST_BUTTON
+      const hoverBackground =
+        variant === 'primary'
+          ? 'var(--dsw-alias-button-primary-hover)'
+          : 'var(--dsw-alias-interactive-bg-hover)'
+      return h(
+        'button',
+        {
+          type: 'button',
+          disabled: Boolean(disabled),
+          onClick,
+          onMouseEnter: () => setHover(true),
+          onMouseLeave: () => setHover(false),
+          style: {
+            ...base,
+            opacity: disabled ? 0.4 : 1,
+            cursor: disabled ? 'not-allowed' : 'pointer',
+            background: hover && !disabled ? hoverBackground : base.background,
+          },
+        },
+        label,
+      )
+    }
+
+    function StatusDot({ tone }) {
+      return h('span', {
+        'aria-hidden': 'true',
+        style: { width: '8px', height: '8px', borderRadius: '50%', background: tone, flex: '0 0 auto' },
+      })
+    }
+
+    /* ------------------------------------------------------------------ *
+     * The channel body: status, binding, and the QR handshake
+     * ------------------------------------------------------------------ */
+    function ChannelBody({ t }) {
+      const [status, setStatus] = React.useState({ phase: 'loading' })
+      const [login, setLogin] = React.useState(null)
+      const [code, setCode] = React.useState('')
+      const [session, setSession] = React.useState(0)
+      const [statusTick, setStatusTick] = React.useState(0)
+      // Rebinding on purpose: a bound card would otherwise leave "scan again"
+      // with nothing to switch on, because the handshake only runs while unbound.
+      const [force, setForce] = React.useState(false)
+      const confirmedHandled = React.useRef(false)
+
+      /** POST helper shared by the polling effect and the rebinding controls. */
+      const post = React.useCallback(
+        (url, body) =>
+          fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            ...(body === undefined
+              ? {}
+              : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
+          }).then((response) => response.json().catch(() => ({}))),
+        [],
+      )
+
+      // 1. Channel status.
+      React.useEffect(() => {
+        let cancelled = false
+        setStatus({ phase: 'loading' })
+        fetch(STATUS_URL, { credentials: 'same-origin' })
+          .then((response) =>
+            response.ok ? response.json() : Promise.reject(new Error('HTTP ' + response.status)),
+          )
+          .then((json) => {
+            if (!cancelled) setStatus({ phase: 'ready', data: json })
+          })
+          .catch((error) => {
+            if (!cancelled) setStatus({ phase: 'error', reason: (error && error.message) || String(error) })
+          })
+        return () => {
+          cancelled = true
+        }
+      }, [statusTick])
+
+      const bound = status.phase === 'ready' && status.data && status.data.bound === true
+
+      // 2. Login handshake, only while unbound. Starting is idempotent on the
+      //    Host: an attempt that is still alive is reused, not replaced.
+      React.useEffect(() => {
+        if (status.phase !== 'ready' || (bound && !force)) return undefined
+        let cancelled = false
+        let timer = null
+
+        async function step() {
+          let snapshot = null
+          try {
+            const response = await fetch(LOGIN_URL, { credentials: 'same-origin' })
+            const body = await response.json()
+            snapshot = body.login || null
+          } catch {
+            snapshot = null
+          }
+          if (cancelled) return
+
+          if (!snapshot || snapshot.phase === 'idle' || snapshot.phase === 'cancelled') {
+            try {
+              const body = await post(LOGIN_START_URL)
+              if (cancelled) return
+              setLogin(body.login || { phase: 'failed', error: body.error || 'unavailable' })
+            } catch (error) {
+              if (!cancelled) setLogin({ phase: 'failed', error: (error && error.message) || String(error) })
+              return
+            }
+          } else {
+            setLogin(snapshot)
+            if (snapshot.phase === 'confirmed') {
+              if (!confirmedHandled.current) {
+                confirmedHandled.current = true
+                setForce(false)
+                setStatusTick((n) => n + 1)
+              }
+              return
+            }
+            if (snapshot.phase === 'failed' || snapshot.phase === 'already-bound') return
+          }
+          if (!cancelled) timer = setTimeout(step, 1200)
+        }
+
+        step()
+        return () => {
+          cancelled = true
+          if (timer) clearTimeout(timer)
+        }
+      }, [status.phase, bound, force, session, post])
+
+      function restart() {
+        setLogin(null)
+        setCode('')
+        confirmedHandled.current = false
+        post(LOGIN_CANCEL_URL).finally(() => setSession((n) => n + 1))
+      }
+
+      function submitCode(event) {
+        event.preventDefault()
+        const trimmed = code.trim()
+        if (!trimmed) return
+        post(LOGIN_VERIFY_URL, { code: trimmed }).catch(() => {})
+        setCode('')
+      }
+
+      const refreshStatus = () => setStatusTick((n) => n + 1)
+
+      /* --- status unresolved --- */
+      if (status.phase === 'loading') {
+        return h('p', { style: MUTED }, t('status.loading'))
+      }
+      if (status.phase === 'error') {
+        return h(
+          'div',
+          { style: PANEL_CARD },
+          h('p', { style: { margin: 0, fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary)' } },
+            t('status.error', { reason: status.reason })),
+          h('div', { style: { marginTop: '10px' } }, h(Btn, { label: t('status.refresh'), onClick: refreshStatus })),
+        )
+      }
+
+      /* --- bound --- */
+      if (bound && !force) {
+        const account = (status.data.accounts && status.data.accounts[0]) || {}
+        const boundAt = account.boundAt ? new Date(account.boundAt).toLocaleString() : '—'
+        return h(
+          'section',
+          null,
+          h(
+            'div',
+            { style: { ...PANEL_CARD, display: 'flex', alignItems: 'center', gap: '8px' } },
+            h(StatusDot, { tone: 'var(--dsw-alias-state-success-primary)' }),
+            h('span', { style: { fontSize: '13px', lineHeight: '20px', fontWeight: 600 } }, t('status.bound')),
+            h('span', { style: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)' } },
+              t('status.boundNote')),
+          ),
+          h(
+            'div',
+            { style: { marginTop: '10px' } },
+            field(t('account.id'), String(account.accountId || '—')),
+            account.userId ? field(t('account.user'), String(account.userId)) : null,
+            field(t('account.boundAt'), boundAt),
+            status.data.diagnostics && status.data.diagnostics.statePath
+              ? field(t('status.field.stateFile'), String(status.data.diagnostics.statePath))
+              : null,
+          ),
+          h('div', { style: { marginTop: '12px', display: 'flex', gap: '8px' } },
+            h(Btn, {
+              label: t('login.rebind'),
+              onClick: () => {
+                setForce(true)
+                restart()
+              },
+            }),
+            h(Btn, { label: t('status.refresh'), onClick: refreshStatus }),
+          ),
+        )
+      }
+
+      /* --- waiting for a scan --- */
+      const phase = (login && login.phase) || 'idle'
+      const busy = phase === 'starting' || phase === 'refreshing' || phase === 'scanned'
+      const terminal = phase === 'failed' || phase === 'already-bound'
+
+      return h(
+        'section',
+        null,
+        h(
+          'div',
+          { style: { ...PANEL_CARD, display: 'flex', alignItems: 'center', gap: '8px' } },
+          h(StatusDot, { tone: busy ? 'var(--dsw-alias-state-warn-primary)' : 'var(--dsw-alias-state-idle-primary)' }),
+          h('span', { style: { fontSize: '13px', lineHeight: '20px', fontWeight: 600 } }, t('status.unbound')),
+          h('span', { style: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)' } },
+            translate(t, 'login.phase.' + phase) || phase),
+        ),
+
+        login && login.qrDataUrl
+          ? h(
+              'div',
+              { style: { marginTop: '12px', display: 'flex', gap: '16px', alignItems: 'flex-start' } },
+              h('img', {
+                src: login.qrDataUrl,
+                alt: t('login.qrAlt'),
+                width: 232,
+                height: 232,
+                // A QR must stay dark-on-light to scan; this is artwork, not chrome.
+                style: { display: 'block', borderRadius: '8px', background: '#ffffff', padding: '8px', flex: '0 0 auto' },
+              }),
+              h(
+                'div',
+                { style: { minWidth: '0', flex: '1 1 auto' } },
+                h('p', { style: { margin: 0, fontSize: '13px', lineHeight: '20px', fontWeight: 600 } }, t('login.scanTitle')),
+                h('p', { style: MUTED }, login.message || t('login.scanHint')),
+                login.refreshed
+                  ? h('p', { style: MUTED }, t('login.refreshed', { count: String(login.refreshed) }))
+                  : null,
+                login.qrUrl
+                  ? h('p', { style: { ...MUTED, marginTop: '8px', wordBreak: 'break-all' } },
+                      t('login.linkHint'), ' ', h('a', {
+                        href: login.qrUrl,
+                        target: '_blank',
+                        rel: 'noreferrer',
+                        style: { color: 'var(--dsw-alias-brand-primary)' },
+                      }, t('login.openLink')))
+                  : null,
+              ),
+            )
+          : h('p', { style: { ...MUTED, marginTop: '12px' } }, login && login.message ? login.message : t('login.preparing')),
+
+        login && login.awaitingVerifyCode
+          ? h(
+              'form',
+              { onSubmit: submitCode, style: { marginTop: '12px', display: 'flex', gap: '8px', alignItems: 'center' } },
+              h('input', {
+                type: 'text',
+                inputMode: 'numeric',
+                value: code,
+                onChange: (event) => setCode(event.target.value.replace(/[^0-9]/g, '').slice(0, 8)),
+                placeholder: t('login.codePlaceholder'),
+                'aria-label': t('login.codePlaceholder'),
+                style: TEXT_INPUT,
+              }),
+              h(Btn, { label: t('login.submitCode'), onClick: submitCode, variant: 'primary' }),
+            )
+          : null,
+
+        login && login.error
+          ? h('p', { style: { margin: '10px 0 0', fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-state-error-primary)' } },
+              login.error)
+          : null,
+
+        terminal
+          ? h('div', { style: { marginTop: '12px' } }, h(Btn, { label: t('login.retry'), onClick: restart }))
+          : null,
+
+        force
+          ? h(
+              'div',
+              { style: { marginTop: '12px' } },
+              h(Btn, {
+                label: t('login.cancel'),
+                onClick: () => {
+                  setForce(false)
+                  restart()
+                },
+              }),
+            )
+          : null,
+      )
     }
 
     /* ------------------------------------------------------------------ *
@@ -203,143 +557,6 @@ window.__ModuleLoader__.load({
             : ACTION_BUTTON,
         },
         t('action.label'),
-      )
-    }
-
-    /* ------------------------------------------------------------------ *
-     * Status
-     * ------------------------------------------------------------------ */
-    /** Read a dictionary entry, answering '' when the key is missing (t echoes the key). */
-    function translate(t, key) {
-      const value = t(key)
-      return value === key ? '' : value
-    }
-
-    function field(name, value) {
-      return h(
-        'div',
-        { key: name, style: FIELD_ROW },
-        h('span', { style: FIELD_NAME }, name),
-        h('span', { style: FIELD_VALUE }, value),
-      )
-    }
-
-    function StatusBlock({ t }) {
-      const [tick, setTick] = React.useState(0)
-      const [state, setState] = React.useState({ phase: 'loading' })
-
-      React.useEffect(() => {
-        let cancelled = false
-        setState({ phase: 'loading' })
-        fetch(STATUS_URL, { credentials: 'same-origin' })
-          .then((response) =>
-            response.ok ? response.json() : Promise.reject(new Error('HTTP ' + response.status)),
-          )
-          .then((json) => {
-            if (!cancelled) setState({ phase: 'ready', json })
-          })
-          .catch((error) => {
-            if (!cancelled) setState({ phase: 'error', reason: (error && error.message) || String(error) })
-          })
-        return () => {
-          cancelled = true
-        }
-      }, [tick])
-
-      const json = state.phase === 'ready' ? state.json : null
-      const connected = !!(json && json.connected)
-      const phase = json && json.phase ? String(json.phase) : 'idle'
-      const phaseText = connected ? translate(t, 'status.phase.' + phase) || phase : t('status.phase.idle')
-
-      const dotColor = connected
-        ? 'var(--dsw-alias-state-success-primary)'
-        : state.phase === 'error'
-          ? 'var(--dsw-alias-state-error-primary)'
-          : 'var(--dsw-alias-state-idle-primary)'
-
-      const summary = connected
-        ? t('status.connected')
-        : state.phase === 'loading'
-          ? t('status.loading')
-          : t('status.disconnected')
-
-      const [refreshHover, setRefreshHover] = React.useState(false)
-
-      return h(
-        'section',
-        null,
-        h(
-          'div',
-          {
-            style: {
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: '12px',
-              marginBottom: '12px',
-            },
-          },
-          h('h3', { style: { margin: 0, fontSize: '13px', lineHeight: '20px', fontWeight: 600 } }, t('status.heading')),
-          h(
-            'button',
-            {
-              type: 'button',
-              onClick: () => setTick((n) => n + 1),
-              onMouseEnter: () => setRefreshHover(true),
-              onMouseLeave: () => setRefreshHover(false),
-              style: refreshHover
-                ? { ...GHOST_BUTTON, background: 'var(--dsw-alias-interactive-bg-hover)' }
-                : GHOST_BUTTON,
-            },
-            t('status.refresh'),
-          ),
-        ),
-        h(
-          'div',
-          {
-            style: {
-              display: 'flex',
-              alignItems: 'center',
-              gap: '8px',
-              padding: '12px 14px',
-              borderRadius: 'var(--dsw-radius-md)',
-              background: 'var(--dsw-alias-bg-layer-1)',
-              border: '0.5px solid var(--dsw-alias-border-l1)',
-            },
-          },
-          h('span', {
-            'aria-hidden': 'true',
-            style: { width: '8px', height: '8px', borderRadius: '50%', background: dotColor, flex: '0 0 auto' },
-          }),
-          h('span', { style: { fontSize: '13px', lineHeight: '20px', fontWeight: 600 } }, summary),
-          h(
-            'span',
-            { style: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)' } },
-            state.phase === 'ready' ? phaseText : '',
-          ),
-        ),
-        state.phase === 'error'
-          ? h(
-              'p',
-              {
-                style: {
-                  margin: '10px 0 0',
-                  fontSize: '12px',
-                  lineHeight: '18px',
-                  color: 'var(--dsw-alias-state-error-primary)',
-                },
-              },
-              t('status.error', { reason: state.reason }),
-            )
-          : null,
-        h(
-          'div',
-          { style: { marginTop: '10px' } },
-          field(t('status.field.endpoint'), STATUS_URL),
-          json ? field(t('status.field.version'), String(json.version || '—')) : null,
-          json ? field(t('status.field.milestone'), String(json.milestone || '—')) : null,
-          json && json.checkedAt ? field(t('status.field.checkedAt'), String(json.checkedAt)) : null,
-        ),
       )
     }
 
@@ -402,23 +619,9 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { style: { minWidth: '0' } },
-              h(
-                'h2',
-                { id: TITLE_ID, style: { margin: 0, fontSize: '16px', lineHeight: '24px', fontWeight: 500 } },
-                t('panel.title'),
-              ),
-              h(
-                'p',
-                {
-                  style: {
-                    margin: '2px 0 0',
-                    fontSize: '12px',
-                    lineHeight: '18px',
-                    color: 'var(--dsw-alias-label-secondary)',
-                  },
-                },
-                t('panel.subtitle'),
-              ),
+              h('h2', { id: TITLE_ID, style: { margin: 0, fontSize: '16px', lineHeight: '24px', fontWeight: 500 } },
+                t('panel.title')),
+              h('p', { style: { ...MUTED, marginTop: '2px' } }, t('panel.subtitle')),
             ),
             h(
               'button',
@@ -454,7 +657,8 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: BODY },
-            h(StatusBlock, { t }),
+            h('h3', { style: { ...SECTION_TITLE, marginBottom: '10px' } }, t('status.heading')),
+            h(ChannelBody, { t }),
             h(
               'section',
               {
@@ -466,23 +670,8 @@ window.__ModuleLoader__.load({
                   borderLeft: '3px solid var(--dsw-alias-brand-primary)',
                 },
               },
-              h(
-                'h3',
-                { style: { margin: 0, fontSize: '13px', lineHeight: '20px', fontWeight: 600 } },
-                t('next.heading'),
-              ),
-              h(
-                'p',
-                {
-                  style: {
-                    margin: '4px 0 0',
-                    fontSize: '12px',
-                    lineHeight: '18px',
-                    color: 'var(--dsw-alias-label-secondary)',
-                  },
-                },
-                t('next.body'),
-              ),
+              h('h3', { style: SECTION_TITLE }, t('next.heading')),
+              h('p', { style: MUTED }, t('next.body')),
             ),
           ),
           h('div', { style: FOOTER }, h('span', null, t('footer.hint')), h('span', null, t('panel.subtitle'))),
@@ -513,20 +702,39 @@ window.__ModuleLoader__.load({
       'status.heading': '连接状态',
       'status.loading': '正在读取状态…',
       'status.refresh': '刷新',
-      'status.connected': '已连接',
-      'status.disconnected': '未连接',
-      'status.phase.idle': '尚未绑定微信',
-      'status.phase.connected': '长连接已建立',
-      'status.phase.reconnecting': '正在重连',
-      'status.phase.failed': '连接失败',
       'status.error': '读取状态失败：{reason}',
-      'status.field.endpoint': '状态接口',
-      'status.field.version': '版本',
-      'status.field.milestone': '里程碑',
-      'status.field.checkedAt': '读取时间',
+      'status.bound': '已绑定',
+      'status.boundNote': '长连接将在下一步启用',
+      'status.unbound': '未绑定',
+      'status.field.stateFile': '状态文件',
+      'account.id': '机器人 ID',
+      'account.user': '微信用户',
+      'account.boundAt': '绑定时间',
+      'login.phase.idle': '准备中',
+      'login.phase.starting': '正在获取二维码',
+      'login.phase.waiting': '等待扫码',
+      'login.phase.scanned': '已扫码，确认中',
+      'login.phase.need_verifycode': '需要配对码',
+      'login.phase.refreshing': '正在刷新二维码',
+      'login.phase.confirmed': '已完成',
+      'login.phase.failed': '失败',
+      'login.phase.cancelled': '已取消',
+      'login.phase.already-bound': '已经绑定过',
+      'login.preparing': '正在准备扫码…',
+      'login.scanTitle': '用手机微信扫描',
+      'login.scanHint': '扫描后按手机上的提示操作',
+      'login.qrAlt': '微信登录二维码',
+      'login.refreshed': '已刷新 {count} 次',
+      'login.linkHint': '二维码显示不出来时，可以',
+      'login.openLink': '在新标签打开扫码链接',
+      'login.codePlaceholder': '配对码',
+      'login.submitCode': '提交',
+      'login.rebind': '重新绑定',
+      'login.cancel': '取消重绑',
+      'login.retry': '重试',
       'next.heading': '这一步做到了什么',
       'next.body':
-        'M1 只有三样东西：设置右上角的按钮、它打开的这个面板、以及面板背后真的在跑的 status 接口。扫码绑定在 M2 接入，之后才是消息收发。',
+        'M2 接通了真实的腾讯 iLink 扫码握手：二维码、长轮询、配对码、换 IDC、二维码过期自动刷新，绑定结果写进状态文件，token 不出宿主进程。下一步（M3）才是让微信消息真正驱动 agent。',
       'footer.hint': '按 Esc 关闭',
     }
 
@@ -539,20 +747,39 @@ window.__ModuleLoader__.load({
       'status.heading': 'Connection status',
       'status.loading': 'Reading status…',
       'status.refresh': 'Refresh',
-      'status.connected': 'Connected',
-      'status.disconnected': 'Not connected',
-      'status.phase.idle': 'No WeChat account bound yet',
-      'status.phase.connected': 'Long poll is live',
-      'status.phase.reconnecting': 'Reconnecting',
-      'status.phase.failed': 'Connection failed',
       'status.error': 'Could not read status: {reason}',
-      'status.field.endpoint': 'Endpoint',
-      'status.field.version': 'Version',
-      'status.field.milestone': 'Milestone',
-      'status.field.checkedAt': 'Read at',
+      'status.bound': 'Bound',
+      'status.boundNote': 'The long poll lands in the next milestone',
+      'status.unbound': 'Not bound',
+      'status.field.stateFile': 'State file',
+      'account.id': 'Bot ID',
+      'account.user': 'WeChat user',
+      'account.boundAt': 'Bound at',
+      'login.phase.idle': 'Preparing',
+      'login.phase.starting': 'Fetching the QR code',
+      'login.phase.waiting': 'Waiting for a scan',
+      'login.phase.scanned': 'Scanned, confirming',
+      'login.phase.need_verifycode': 'Pairing code needed',
+      'login.phase.refreshing': 'Refreshing the QR code',
+      'login.phase.confirmed': 'Done',
+      'login.phase.failed': 'Failed',
+      'login.phase.cancelled': 'Cancelled',
+      'login.phase.already-bound': 'Already bound',
+      'login.preparing': 'Preparing the handshake…',
+      'login.scanTitle': 'Scan with WeChat',
+      'login.scanHint': 'Then follow the prompt on your phone',
+      'login.qrAlt': 'WeChat login QR code',
+      'login.refreshed': 'Refreshed {count} time(s)',
+      'login.linkHint': 'If the QR code will not render,',
+      'login.openLink': 'open the scan link in a new tab',
+      'login.codePlaceholder': 'Pairing code',
+      'login.submitCode': 'Submit',
+      'login.rebind': 'Bind another account',
+      'login.cancel': 'Cancel rebinding',
+      'login.retry': 'Retry',
       'next.heading': 'What this milestone proves',
       'next.body':
-        'M1 is three things only: the button in the settings header, the panel it opens, and the status endpoint really running behind it. QR binding lands in M2; message delivery after that.',
+        'M2 speaks the real Tencent iLink handshake: QR, long poll, pairing code, IDC redirect, automatic QR refresh on expiry, and the binding persisted to the state file with the token never leaving the Host. Making WeChat messages actually drive the agent is M3.',
       'footer.hint': 'Press Esc to close',
     }
 

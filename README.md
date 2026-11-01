@@ -2,29 +2,98 @@
 
 WeChat channel for DeepSeek Harness — bind WeChat, then drive the agent on this machine from your phone.
 
-**Status: M1 (skeleton).** This milestone proves the plumbing, not the feature:
+**Status: M2 (QR binding).** What works today:
 
-- a 「weBot设置」 action in the settings header, immediately right of the shipped
+- a 「weBot设置」 action in the settings header, right of the shipped
   「打开配置文件」 (`open-document`, order 0) and left of Close;
 - the full-screen panel that action opens;
-- the Host endpoint `GET /api/webot/status` behind it, registered on the shared
-  browser connection channel so it inherits Harness authentication.
+- the real Tencent iLink QR handshake: fetch QR, long-poll its status, pairing
+  code, IDC redirect, automatic refresh on expiry, and the resulting binding
+  persisted to disk;
+- `GET /api/webot/status` reporting the bound account (never its token).
 
-No WeChat protocol code exists yet. QR binding (M2), text both ways (M3), session
-commands (M4), approvals from the phone (M5) and media (M6) come later.
+Not built yet: the long poll that receives messages (M3), text both ways (M3),
+session commands (M4), approvals from the phone (M5), media (M6).
 
 ## Layout
 
 | File | Role |
 | --- | --- |
-| `index.js` | Host half: the status route. |
-| `client.js` | Browser half: the header button and the panel. Plain JS, no build step. |
+| `index.js` | Host half: routes, the one live login attempt, status document. |
+| `src/protocol/http.js` | iLink transport: headers, verbs, timeouts, error shape. |
+| `src/protocol/login.js` | QR login state machine. |
+| `src/state.js` | Durable state: atomic write, whitelist normalization. |
+| `client.js` | Browser half: the header button and the panel. Plain JS, no build. |
 | `cordis.patch.yml` | One Host row, id `dsh-webot`. |
-| `locale/{zh,en}.json` | Plugin Manager / inventory display metadata. |
-| `tools/` | Dev-only readers for the installed DSH bundles (see below). |
+| `tools/` | Dev-only readers for the installed DSH bundles. |
 
 Package name, patch row id and the `client.js` module id must stay equal
 (`dsh-webot`); the plugin manager and the client module loader both key on it.
+
+## The protocol layer
+
+Written against `@tencent-weixin/openclaw-weixin@2.4.10` (MIT, published by
+Tencent), which is the only authority for this protocol — every field name here
+was read from `src/api/api.ts`, `src/api/types.ts` and `src/auth/login-qr.ts`,
+none of it guessed.
+
+The handshake is not one request:
+
+```
+POST ilink/bot/get_bot_qrcode?bot_type=3   -> { qrcode, qrcode_img_content }
+GET  ilink/bot/get_qrcode_status?qrcode=…  -> long poll, up to 35s
+       wait | scaned | need_verifycode | scaned_but_redirect
+       expired | verify_code_blocked | binded_redirect | confirmed
+```
+
+Three details are load-bearing:
+
+- **A long-poll timeout or network error is not a failure.** The upstream client
+  turns both into `wait` and keeps polling; treating them as errors aborts every
+  login roughly 35 seconds in.
+- **`scaned_but_redirect` moves polling to `https://<redirect_host>`** and the QR
+  stays the same. It is a host change, not progress.
+- **`X-WECHAT-UIN` is base64 of the decimal text** of a random uint32, not base64
+  of the four bytes. GET and POST build their headers from different helpers.
+
+## Dependency: `qrcode`
+
+The panel shows a QR image, so the Host encodes one. The import in
+`src/protocol/login.js` is **dynamic and lazy** on purpose: a profile installs
+this bundle as `link:<workspace>` and pnpm does not install dependencies for a
+linked package, so a static import would take the whole Host row down with
+`ERR_MODULE_NOT_FOUND` before any route existed. Lazily imported, a missing
+dependency becomes one legible line in the panel instead.
+
+```bash
+cd <plugin dir> && npm install     # pulls qrcode
+```
+
+## State file
+
+`$DSH_HOME/webot/state.json`, written atomically (temp file + rename) so a reader
+sees either the old document or the whole new one.
+
+`normalizeState` is a **whitelist**: a field missing from it is written happily
+and silently dropped on the next boot. Any change that starts writing a new field
+must add it there in the same commit.
+
+Windows caveat, measured: `fs` mode bits are not enforced. A file created `0600`
+reports `666` and inherits the parent directory's ACL. In the real location that
+is `%USERPROFILE%\.dsh\webot`, already restricted to the user, SYSTEM and
+Administrators — but do not move the file somewhere world-readable and assume the
+mode argument still protects it.
+
+## Security
+
+- **Tokens never leave the Host process.** `/api/webot/status` reports each
+  account as `{ accountId, userId, boundAt, hasToken }`. A merely authenticated
+  page cannot exfiltrate the channel's credentials.
+- Every route is registered on `ctx.connection.fetch`, not the raw web server, so
+  it inherits Harness authentication, Host/Origin admission and middleware.
+- The binding is cryptographically tied to the WeChat account that scanned: the
+  token embeds `ilink_user_id`, and the gateway only delivers messages from that
+  one account.
 
 ## Why the panel is not in `shell.overlay`
 
@@ -34,22 +103,20 @@ Measured in `@deepseek-ai/dsh-client-ui-settings-general` (0.2.1-rc.5):
 - `shell.overlay` renders inside the layout frame, i.e. inside `#root`.
 
 A body-level sibling at `z-index:1000` beats any descendant of `#root` regardless
-of the descendant's own `z-index`, because that descendant is confined to `#root`'s
-stacking level. A panel mounted in `shell.overlay` therefore always paints behind
-Settings — the observed symptom was a panel that only appeared after closing it.
+of that descendant's own `z-index`. A panel mounted in `shell.overlay` therefore
+always paints behind Settings — the observed symptom was a panel that only
+appeared after closing it.
 
 The panel is rendered from the header action's own subtree instead: inside the
 dialog's `z-index:1000` stacking context, `position: fixed` reaches the viewport
-(no transformed ancestor in between) and paints above the dialog's mask and panel.
-No portal, no `document.body` append, no second application root.
-
-Consequence: closing Settings closes the panel too. That is the intended
-behaviour, since the panel's only entry point is that header.
+and paints above the dialog's mask and panel. No portal, no `document.body`
+append, no second application root. Closing Settings closes the panel too, which
+is intended — the panel's only entry point is that header.
 
 ## Matching the host look
 
 The button copies `Button variant="outline" size="sm"` from
-`dsh-client-ui-primitives` instead of importing it (a plain-JS plugin must not
+`dsh-client-ui-primitives` rather than importing it (a plain-JS plugin must not
 load other Harness Client packages — a throwing import blanks the slot entry):
 
 ```
@@ -61,23 +128,22 @@ hover var(--dsw-alias-interactive-bg-hover)
 The panel copies the settings dialog's geometry (`800px`, the same
 `--dsh-frame-overlay-top` height clamp, `--dsw-radius-panel`,
 `--dsw-elevation-prominent`, `--dsw-alias-bg-mask-1` + `--dsw-mask-blur`) so the
-two read as one family.
-
-Styles reference only `--dsw-alias-*` / `--dsw-*` tokens; literal colours appear
-in `icon.svg` artwork only.
+two read as one family. Styles use only `--dsw-*` tokens; literal colours appear
+in `icon.svg` and in the QR tile, which must stay light to scan.
 
 ## Behaviour notes
 
-- `Escape` is handled in the capture phase, so closing this panel does not also
+- `Escape` is handled in the capture phase, so closing the panel does not also
   close the settings dialog underneath it.
-- The action button toggles (`aria-expanded`), and the mask click closes.
-- Focus moves to the close button on open and is restored on close.
+- The action button toggles (`aria-expanded`); a mask click closes.
+- Opening the panel while unbound starts the handshake automatically. Starting is
+  idempotent on the Host: a live attempt is reused, a settled one replaced.
 
 ## Dev tools
 
-`tools/asar-extract.mjs` and `tools/asar-find.mjs` read the installed
-`app.asar` directly (`rg`, `glob` and shell commands cannot see inside it, but
-Node can), which is how the CSS and stacking facts above were established:
+`tools/asar-extract.mjs` and `tools/asar-find.mjs` read the installed `app.asar`
+directly (`rg`, `glob` and shell commands cannot see inside it, but Node can),
+which is how the CSS and stacking facts above were established:
 
 ```bash
 node tools/asar-find.mjs "<...>/app.asar" ui-settings-general 20
@@ -87,15 +153,12 @@ node tools/asar-extract.mjs "<...>/app.asar" \
 node tools/snippet.mjs .scratch/index.css 'outline' 160 4
 ```
 
-`tools/snippet.mjs` prints context around regex matches, which is the only
-practical way to read minified CSS where every rule sits on one line.
-
 ## Install
 
-`plugin_manager` → `install_bundle` with this directory as the target, into the
-`desktop` profile. The Host half needs a DSH restart; the Client half reloads
-with a page refresh because the installed package is a link to this directory.
+1. `npm install` in this directory (the `qrcode` dependency).
+2. `plugin_manager` → `install_bundle`, target this directory, profile `desktop`.
+3. Restart DSH for the Host half. The Client half follows the page.
 
 ## Licence
 
-MIT.
+MIT. Protocol reference: `@tencent-weixin/openclaw-weixin` (MIT, Tencent).
