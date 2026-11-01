@@ -1,14 +1,18 @@
 # dsh-webot
 
+**中文** · [English](README.en.md)
+
 **微信通道插件，给 DeepSeek Harness 用。** 装上以后，DSH 的设置页右上角会多一个
 「weBot设置」按钮：扫码绑定微信，之后在手机上就能给这台电脑上的 agent 派活、看结果、
 批权限。
 
 - 微信里发消息 → DSH 里干活 → 结果发回手机
-- agent 自己在微信里回话（`send_to_wechat` 工具），想分几条就分几条
-- 发图片/文件给它，它会存进工作区并读得懂；它也能反过来发图给你
-- 敏感操作把权限请求推到手机：回 `1` 允许 / `2` 拒绝 / `3` 取消
+- agent 自己决定怎么回话（`send_to_wechat` 工具），想分几条就分几条
+- 发图片、文件、语音给它，存进工作区并读得懂；它也能反过来发图给你
+- 敏感操作的权限请求推到手机：回 `1` 允许 / `2` 拒绝 / `3` 取消
 - 干活时你插话，它会打断当前这一轮，而不是排队等
+- 微信里管理会话：`/list`、`/switch`、`/new`、`/current`、`/cancel`
+- 场景提示词存多套、随时切换
 - 别的会话跑完、你又不在电脑前，会给你发一条提醒（仅 Windows）
 
 ---
@@ -20,7 +24,7 @@
 | 项 | 要求 |
 |---|---|
 | DeepSeek Harness | 桌面版，能用插件管理（`plugin_manager`） |
-| 系统 | **Windows 10/11** 功能完整；macOS / Linux 除「任务完成提醒」外都可用（原因见下方兼容性） |
+| 系统 | **Windows 10/11** 功能完整；macOS / Linux 除「任务完成提醒」外都可用（原因见兼容性） |
 | 网络 | 能访问 `ilinkai.weixin.qq.com`（腾讯 iLink 网关） |
 | 微信 | 手机微信，扫码即可，不需要公众号或企业微信 |
 
@@ -41,11 +45,12 @@ agent 说：
 
 > 用 plugin_manager 把 `<你克隆下来的绝对路径>` 装成 bundle
 
-它会执行 `install_bundle`，把依赖（`qrcode`）一并装好。安装结果是
-`application: applied` 就算成功；如果返回 `restart-required`，进入第 3 步。
+它会执行 `install_bundle`，把依赖（`qrcode`）一并装好。结果是 `application: applied`
+就算成功；如果返回 `restart-required`，进入第 3 步。
 
-> 装不上时的兜底：这个插件只有一个运行期依赖。如果提示 `二维码依赖未安装（qrcode）`，
-> 进插件目录执行一次 `npm install` 即可，DSH 是直接从目录加载的。
+> 兜底：这个插件只有一个运行期依赖。如果扫码那一步提示
+> `二维码依赖未安装（qrcode）`，进插件目录执行一次 `npm install` 即可——DSH 是直接
+> 从目录加载的，那里缺 `node_modules` 就是唯一要修的东西。
 
 **3. 重启 DSH**
 
@@ -55,7 +60,7 @@ Host 半必须重启才会加载；Client 半（那个按钮和面板）刷新�
 
 1. DSH → 设置 → 右上角 **「weBot设置」**
 2. 面板会自动拉取二维码，用手机微信扫码
-3. 扫完面板显示「已连接 · 微信消息会送到这里」，绑定关系已写进
+3. 扫完面板显示「已连接 · 微信消息会送到这里」，绑定关系写进
    `%USERPROFILE%\.dsh\webot\state.json`
 
 之后在微信里给这个 bot 发一句话，它就会在 DSH 里建一个会话开始干。
@@ -68,7 +73,7 @@ Host 半必须重启才会加载；Client 半（那个按钮和面板）刷新�
 → 几秒后微信收到回复
 ```
 
-日志在 `%USERPROFILE%\.dsh\webot\events.log`，里面每一行都是一次真实动作
+日志在 `%USERPROFILE%\.dsh\webot\events.log`，每一行都是一次真实动作
 （`inbound` / `prompt full` / `send ok` / `done sent` …）。**排查问题时先看它。**
 
 ---
@@ -78,24 +83,26 @@ Host 半必须重启才会加载；Client 半（那个按钮和面板）刷新�
 | 功能 | Windows | macOS / Linux |
 |---|---|---|
 | 扫码绑定、收发文字 | ✅ | ✅ |
-| 收发图片/文件/视频 | ✅ | ✅ |
+| 收发图片 / 文件 / 视频 | ✅ | ✅ |
 | 权限请求、选择题推到手机 | ✅ | ✅ |
 | 会话命令（`/list` 等） | ✅ | ✅ |
 | 任务完成提醒（判断你离没离开电脑） | ✅ | ❌ 自动关闭 |
 
-**为什么任务完成提醒只在 Windows**：它要判断"人还在不在电脑前"，做法是采样鼠标
-累计移动距离。这需要 `GetCursorPos` / `GetLastInputInfo`，插件里通过 PowerShell 调
-Windows API。macOS 和 Linux 没有免原生依赖的等价物，而这个插件刻意不带 native 模块
-（否则每个用户都要装编译工具链）。
+**为什么任务完成提醒只在 Windows**：它判断"人还在不在电脑前"的办法是采样鼠标累计
+移动距离，这需要 `GetCursorPos` / `GetLastInputInfo`，插件里通过 PowerShell 调 Windows
+API。macOS 和 Linux 没有免原生依赖的等价物，而这个插件刻意不带 native 模块——否则每个
+用户都得装一套编译工具链。
 
-在非 Windows 上这个开关会被**忽略**，日志里记一行
+在其它平台上这个开关会被**忽略**，日志里记一行
 `done disabled | presence probe needs Windows`，不会退化成"每次任务结束都发微信"。
 
-### 依赖什么 DSH 能力
+### 依赖 DSH 的哪些能力
 
-- 服务：`connection`（注册 HTTP 路由）、`sessionController`（建会话、投递、取消）、`tools`（注册 `send_to_wechat`）
-- 事件：`agent/assistant-stream`、`agent/status`、`approval/request`（waterfall）、`user-questions/request`（waterfall）
-- 槽位：`settings.action`（那个按钮）、`shell.overlay`（面板的挂载点）
+- 服务：`connection`（注册 HTTP 路由）、`sessionController`（建会话、投递、取消）、
+  `tools`（注册 `send_to_wechat`）
+- 事件：`agent/assistant-stream`、`agent/status`、`approval/request`（waterfall）、
+  `user-questions/request`（waterfall）
+- 槽位：`settings.action`（那个按钮）、`shell.overlay`
 
 这几样只要有一个变了，插件会在启动日志里明确报出来（`tool registry unavailable` /
 `status listener: rejected` 之类），不会静默失效。
@@ -108,7 +115,7 @@ Windows API。macOS 和 Linux 没有免原生依赖的等价物，而这个插�
 |---|---|
 | `index.js` | Host 半：HTTP 路由、登录状态机、会话投递、工具注册 |
 | `client.js` | 浏览器半：设置页那个按钮和整个面板（纯 JS，无构建） |
-| `src/protocol/` | iLink 协议：HTTP、登录、消息、媒体下载/上传 |
+| `src/protocol/` | iLink 协议：HTTP、登录、消息、媒体下载与上传 |
 | `src/channel.js` | 通道核心：长轮询、消息分发、回复、审批、通知 |
 | `src/state.js` | 状态文件：原子写、白名单校验、旧字段迁移 |
 | `src/persona.js` | 提示词默认值 |
@@ -119,408 +126,310 @@ Windows API。macOS 和 Linux 没有免原生依赖的等价物，而这个插�
 
 ---
 
-## 设计说明（英文）
+---
 
-下面这些是开发过程中记下来的取舍和踩过的坑，保留原文，方便改这个插件的人。
-想看功能怎么用，上面已经写完了。
+*下面这些是开发过程中记下来的取舍和踩过的坑，留着方便改这个插件的人。只想用的话，
+上面已经写完了。*
 
-## How one message travels
+## 一条消息怎么走
 
 ```
-WeChat ──► iLink getupdates (long poll, 35s)
-             │  message_type 1 only; duplicate message ids dropped
-             ▼
-        conversation key = accountId:userId
-             │  first message creates the DSH session, later ones reuse it
-             ▼
-        sessionController.prompt({ sessionId, content:[{type:'text'}] })
-             │
-             ▼
-        agent runs tools ──► send_to_wechat(text|path) ──► iLink ──► the phone
-             │
-             └─► agent/assistant-stream is accumulated as *evidence only*
+微信 ──► iLink getupdates（长轮询，35 秒）
+           │  只看 message_type 1；重复的 message_id 丢掉
+           ▼
+      会话键 = accountId:userId
+           │  第一条消息创建 DSH 会话，之后复用
+           ▼
+      sessionController.prompt({ sessionId, content:[{type:'text'}] })
+           │
+           ▼
+      agent 调工具 ──► send_to_wechat(text|path) ──► iLink ──► 手机
+           │
+           └─► agent/assistant-stream 只被累积成"证据"
 ```
 
-**Nothing is forwarded automatically.** The agent composes every message through
-`send_to_wechat`, so it decides what is said, how many messages there are, and
-whether this turn answers at all.
+**没有任何内容是自动转发的。** 每一句话都由 agent 通过 `send_to_wechat` 自己写出去，
+所以"说什么、分几条、这一轮到底回不回"都是它的决定。
 
-### Telling the phone when a desk task finishes
+这个决定就是它取代"自动转发"的原因：早先一次回答会拆成两条不匹配的消息——工具调用
+在两次模型步之间造成停顿，静默计时器趁机发了前半段，后半段随后再来一条。
 
-The channel also watches sessions it does **not** own. When one of them goes idle
-(the `agent/status` listener is global), it samples the pointer for
-`doneNotifyDelaySec` and then answers one question: *is anybody at this computer?*
+文本流仍然会被累积，但只用来回答 `agent/status` 变成 `idle` 时的一个问题：
+**这一轮到底发出去了没有？** 日志记成
+`turn <id> | idle | tool-sends=N | draft=M chars`；如果模型写了正文却一次都没发，
+末尾会追加 `NO REPLY SENT`。这是这套设计**唯一能产生的失败**，也是那个计数器存在的
+理由。
 
-- total pointer travel under **120 px** (about four pointer widths) → nobody is
-  sitting there → **send one line**, composed by the channel, not the model:
+正因为"发不发"是个决定，提示词把这条规则放在最前面、且不打折扣：
+*每轮结束前必须调用 send_to_wechat 的 text 参数……不调用，他就什么都收不到，而且不会
+有任何报错。*
+
+### 别的会话跑完时通知手机
+
+通道也会盯着**不属于自己**的会话。其中一个进入 idle（`agent/status` 监听器是全局的），
+它就采样鼠标 `doneNotifyDelaySec` 这么久，然后回答一个问题：*这台电脑前有人吗？*
+
+- 累计移动 **不到 120px**（约 4 个光标距离）→ 没人 → **发一句话**，由通道直接写，不经过模型：
 
 ```
 [系统提示] weBot · 修一下发送 · DSH 已跑完
 ```
 
-- more travel than that, or steady typing → you are at the desk → **stay quiet**.
+- 移动超过这个距离，或者一直在敲键盘 → 你在电脑前 → **不发**。
 
-**Why a distance and not "any input".** The first version asked `GetLastInputInfo`
-whether *anything* had happened, and a bumped desk cancels that — a reminder you
-never saw. Measuring how far the pointer travelled separates a nudge from a person
-reaching for the mouse. Typing counts too, as a sample count rather than a distance:
-someone in an editor has not moved the pointer but is plainly present.
+**为什么用距离而不是"有没有输入"。** 第一版问 `GetLastInputInfo` "有没有任何动作"，
+结果桌子震一下就取消了提醒——而那条提醒你根本没看到。改成量指针走了多远，才能把
+"碰了一下"和"伸手去用鼠标"分开。键盘也算，但用的是采样计数而不是距离：在编辑器里打字
+的人指针没动，可他显然在。
 
-**One process, not 120.** Sampling from Node would mean a process launch every
-250 ms. A single PowerShell process is started once and loops internally, returning
-one line — `travel keys` — when the window closes.
+**一个进程，不是 120 个。** 在 Node 里采样意味着每 250ms 起一个进程。现在只起一个
+PowerShell 进程，让它自己在窗口内循环，结束时打印一行 `travel keys`。
 
-Verified against real movement: dragging the pointer 200 px makes the sampler report
-`travelPx: 200`, and the thresholds behave (`119 → away`, `120 → present`).
+用真实移动验证过：把指针拖动 200px，采样器报 `travelPx: 200`；阈值也对
+（`119 → 不在`，`120 → 在`）。
 
-If the probe cannot run, the message is sent and the log says so: the purpose is to
-reach the phone, and silence would be indistinguishable from a task that never
-finished. Off by default — it is the one setting that produces messages nobody
-typed.
+在 Windows 上探测失败时，消息照发，日志会说清楚：目的是让手机知道，而沉默和"任务
+压根没跑完"无法区分。在根本不可能支持的系统上，整个功能关闭。**默认关**——这是唯一
+一个会发出"没人打字"的消息的设置。
 
-That decision is why this mode replaced auto-forwarding: one answer used to arrive
-as two mismatched messages, because a quiet-period timer fired in the pause a tool
-call creates between model steps, sent the text so far, and the rest followed
-afterwards.
+### 打断正在跑的一轮
 
-The stream is still accumulated, but only to answer one question at `agent/status`
-`idle`: **did this turn actually reply?** The log records it as
-`turn <id> | idle | tool-sends=N | draft=M chars`, and appends `NO REPLY SENT` when
-the model drafted text and sent nothing. That case is the only failure this design
-can produce, and it is the reason the counter exists.
+agent 干活时收到的消息以 `steer` 提交，不是 `queue`。排队意味着用户在回答一个已经
+过时的答案，而 agent 继续干一件没人要的活——这就是"忙起来之后它好像不理手机"的由来。
 
-Because delivery is a decision, the channel prompt states it first and without
-hedging: *每轮结束前必须调用 send_to_wechat 的 text 参数……不调用，他就什么都收不到，
-而且不会有任何报错。*
+`steer` 被拒是**真实结果，不是错误**：它瞄准的那一轮可能在决定和提交之间结束了。
+这时改以 `queue` 提交，因为丢掉消息是唯一无法事后修复的失败。日志会记到底是哪种
+（`prompt steered` / `prompt queued`），所以"它怎么从来不打断"是可诊断的，而不是玄学。
 
-### Interrupting a running turn
+这个通道创建的每个会话，`cwd` 固定为 `$DSH_HOME/dsh_webot`。它绝不能按会话变化：
+Host 靠 `cwd` 认领一个已有会话，对不上就会让那个会话永久失联。
 
-A message sent while the agent is working is submitted as `steer`, not `queue`.
-Queueing it means the user is answering an answer that is already stale, and the
-agent finishes work nobody asked for any more — which is what makes a busy session
-feel like it is ignoring the phone.
+## 设置
 
-A refused `steer` is a real outcome, not an error: the turn it targeted can end
-between the decision and the submit. The message is then submitted as `queue`,
-because losing it is the one failure nothing can repair. The log records which
-happened (`prompt steered` / `prompt queued`), so a session that never interrupts
-is diagnosable rather than mysterious.
+所有可调项都在面板里，范围在两端都校验：输入框会夹紧，`/api/webot/settings` 也会
+拒绝越界值而不是存下去。每个字段的 `?` 都有说明，这张表只是摘要。
 
-`cwd` for every session this channel creates is fixed at `$DSH_HOME/dsh_webot`.
-It must never vary per conversation: the Host matches an adopted session by
-`cwd`, and a mismatch makes that session permanently unreachable.
+| 设置 | 默认 | 范围 | 作用 |
+|---|---|---|---|
+| 权限请求在哪回答 | 手机 | 手机 / 电脑 | 谁来接住权限请求 |
+| 等多久算放弃 | 30 秒 | 5–300 | 超过这个时间没人答就当作拒绝 |
+| 文件合并 | 20 秒 | 0–300 | 收到的文件等这么久，等你补一句说明；0 = 不等 |
+| 单次附件数 | 3 | 1–10 | 一条消息里最多处理几个附件 |
+| 提示词重发 | 20 轮 | 1–200 | 每几轮重发一次完整提示词（1 = 每轮都发） |
+| 单条消息上限 | 1200 字 | 200–4000 | 一条微信消息最长多少字，超过就切开 |
+| /list 行数 | 10 | 3–30 | `/list` 最多列几行 |
+| 任务完成提醒 | 关 | 开 / 关 | 别的会话跑完时是否通知手机 |
+| 等待秒数 | 30 秒 | 5–600 | 盯多久再决定 |
+| 鼠标阈值 | 120 px | 20–1000 | 移动多少才算"人在电脑前" |
+| 提示词 | 内置文本 | 0–8000 字 | 追加在每轮消息末尾的那段 |
 
-## Settings
+**故意不放进面板的**：轮询重试间隔、去重缓存条数、会话列表缓存、拆条阈值。这些是
+工程常量——把它们暴露出去，等于允许用户在自己都不知道的情况下让通道变慢或丢消息。
 
-Everything tunable lives in the panel, with the range enforced on both sides: the
-input clamps, and `/api/webot/settings` rejects an out-of-range value rather than
-storing it. Every field's `?` explains it; this table is the summary.
+## 在 DSH 里看见这个会话
 
-| Setting | Default | Range | What it does |
-| --- | --- | --- | --- |
-| 权限请求在哪回答 | 手机 | phone / desktop | Who claims a permission prompt |
-| 等多久算放弃 | 30 s | 5–300 | Unanswered prompt is rejected after this |
-| 文件合并 | 20 s | 0–300 | An inbound file waits this long for its follow-up text; 0 = never wait |
-| 单次附件数 | 3 | 1–10 | Attachments handled per inbound message |
-| 提示词重发 | 20 turns | 1–200 | Turns between full-prompt resends (1 = every turn) |
-| 单条消息上限 | 1200 chars | 200–4000 | Longest single WeChat message before splitting |
-| /list 行数 | 10 | 3–30 | Rows `/list` prints |
-| 任务完成提醒 | off | on/off | Notify the phone when another session finishes |
-| 等待秒数 | 30 s | 5–600 | How long to watch the desk before deciding |
-| 鼠标阈值 | 120 px | 20–1000 | Pointer travel that counts as "somebody is here" |
-| 提示词 | shipped text | 0–8000 chars | The note appended to each turn |
+只带 `cwd` 创建出来的会话会掉进内置的 "Ungrouped" 分组，而桌面侧栏不渲染那个分组——
+会话在磁盘上存在、能回微信，但在应用里看不见。第一个只有文字的里程碑之后就是这个状态，
+当时是靠"磁盘上有会话目录、侧栏没有这一行"确认的。
 
-Deliberately **not** in the panel: the poll retry interval, the duplicate-id cache
-size, the session-listing cache and the bubble-splitter thresholds. Those are
-engineering constants — changing them from a UI would let a user make the channel
-silently slower or lossier without any way to tell.
+现在用两个办法解决：
 
+- 通道创建的会话建在**具名工作区** `$DSH_HOME/dsh_webot` 里，于是和其它会话一样出现在
+  侧栏；
+- 面板的「会话绑定」会列出 Host 的会话，可以把这个微信对话绑到其中任意一个——包括你
+  已有的会话——或者解绑，让下一条消息在工作区里新开一个。
 
-## Seeing the session in DSH
+## 提示词
 
-A session created with only a `cwd` lands in the built-in "Ungrouped" bucket,
-and the desktop sidebar does not render that bucket — the session exists on
-disk, answers WeChat messages, and is invisible in the app. That was the state
-after M3, confirmed by a session directory on disk with no sidebar row.
-
-M4 fixes it in two ways:
-
-- channel-created sessions are created inside a **named workspace** at
-  `$DSH_HOME/dsh_webot`, so they appear in the sidebar like any other;
-- the panel's 「会话绑定」 section lists the Host's sessions and binds the
-  conversation to any of them — including one you already had — or detaches it,
-  so the next message starts a fresh session inside the workspace.
-
-## The prompt
-
-**Named scenarios, plus one anchor.** The long note is no longer a single string: it
-is a list of scenarios you can add, edit, switch and delete, because the voice you
-want for work is not the one you want at 11pm.
+**具名场景 + 一条锚点。** 长提示词不再是单个字符串，而是一个可以增删改和切换的列表，
+因为白天干活要的口气和晚上十一点要的不是同一个。
 
 ```
 场景提示词  [ 工作 ▾ ]  [调整] [删除]
            点击添加场景提示词
 ```
 
-| Layer | When | Size |
-| --- | --- | --- |
-| Anchor | **every turn, no switch** | 48 chars |
-| Scenario (the active one) | every N turns, or when the text changes — **switchable** | up to 8,000 chars |
+| 层 | 何时发 | 大小 |
+|---|---|---|
+| 锚点 | **每轮都发，没有开关** | 48 字 |
+| 场景（当前选中的那个） | 每 N 轮，或文本改动后 —— **可关** | 最多 8000 字 |
 
-`发送场合提示词` turns the scenario note off entirely; the anchor has no such control on
-purpose. Turning the note off costs nothing but the persona; turning the anchor off
-would silence every reply path at once, and silently.
+`发送场合提示词` 可以把场景提示词整个关掉；锚点没有这个开关，这是故意的：关掉场景只是
+没有人格，关掉锚点会让所有回复路径一起静默。
 
-Adding and editing happen in their own dialog — name, content, save, cancel — because
-a full prompt does not belong in a row of a settings list.
+增删改各自在自己的对话框里完成（名称 → 内容 → 保存 / 取消），因为一整段提示词不该塞进
+设置列表的一行里。两个框都自己提交，没有"忘了点保存"这回事。
 
-**Deleting is staged.** 删除 greys the option and turns into 撤销删除; nothing is
-written until the panel closes. That way one misplaced click cannot destroy a prompt
-that took ten minutes to write, and the undo is in the same place as the mistake.
-The last scenario cannot be deleted: the channel would have nothing to send.
+**删除是延迟的。** 点「删除」会让那个选项变灰、按钮变成「撤销删除」，但**直到面板关闭
+才真正写入**。这样一次误点毁不掉一段写了十分钟的提示词，而且撤销就在犯错的地方。最后
+一个场景删不掉：删光了通道就没东西可发。
 
-`channelPrompt` from an earlier version is migrated into the first scenario on read,
-so an upgrade never drops text somebody wrote.
+旧版本里的 `channelPrompt` 在读取时会迁移成第一个场景，所以升级不会丢掉别人写过的文字。
 
-The anchor carries exactly one rule: *这轮回复要用 send_to_wechat 的 text 发出去，否则他
-收不到任何消息*. It is exempt from the schedule because in tool-only mode a turn that
-misses it reaches nobody and reports no error — the one failure here with no
-recovery. Saving those 48 characters would trade a rounding error of tokens for
-silent lost messages.
+锚点只讲一条规则：*这轮回复要用 send_to_wechat 的 text 发出去，否则他收不到任何消息*。
+它不受轮次调度约束，因为在这个模式下一轮漏了它就等于谁都收不到、而且不报错——这里唯一
+无法挽回的失败。省下这 48 个字，换来的是一批静默丢失的消息，不划算。
 
-**Both strings are editable**, in the panel's 提示词 group: 每轮都追发的提醒 is the
-anchor (capped at 300 characters, because it is paid on every message) and 场合提示词
-is the note above. Each has its own 恢复默认. Clearing the anchor turns it off — the
-field says so, because that is the one edit here that can quietly reintroduce silent
-non-replies.
+**两段都能改**，都在面板的「提示词」组里：**每轮都追发的提醒**是锚点（上限 300 字，
+因为它每条消息都要付），**场合提示词**是上面那个场景。把锚点清空等于关掉——字段的说明
+里写了这一点，因为那是这里唯一一个会悄悄把"静默不回"带回来的操作。
 
-The full note is re-sent on two triggers: the turn count (a long working session,
-where the note drifts far back in the context) and an edit (the user just changed it
-and expects it applied now). A restart empties the tracker in memory, so the next
-message re-sends it once.
+完整提示词在两个时机重发：轮数到了（长会话里提示词会被推到很远的上下文里），或者文本
+改动了（用户刚改完，期待立刻生效）。重启会清空内存里的计数，所以下一条消息会重发一次。
 
-**No idle-time trigger, on purpose.** A chat resumed hours later still has the note
-earlier in its own transcript, so counting turns loses nothing — and a clock trigger
-would fire on the one occasion the context is least likely to have dropped it.
+**故意没有"闲置多久就重发"。** 隔了几小时再聊，那段提示词还在这个会话自己的历史里，
+按轮数算不会丢东西——而时钟触发恰恰会在上下文最不可能丢的时候多发一次。
 
-`提示词重发` in the panel sets N (default 20, 1–200; `1` restores the old
-every-turn behaviour). The log says which layer went out:
+面板里的「提示词重发」就是那个 N（默认 20，1–200；填 `1` 回到旧的"每轮都发"）。日志
+会说清楚发出去的是哪一层：
 
 ```
 prompt full | 1509 chars | next in 20 turns
 prompt anchor | 3/20 turns
 ```
 
-The shipped default is the authored "微信聊天助手" prompt in seven sections. The
-order is the priority order:
+内置默认是那套「微信聊天助手」，分七节，**顺序就是优先级**：
 
-| Section | Purpose |
-| --- | --- |
-| 一、基本规则 | Nothing is auto-sent, the phone-only setting, how to hand over a file, message length, and the ban on pretending a task succeeded |
-| 二、人格设定 | Who is speaking: gentle, 细腻, a little shy, a little sisterly |
-| 三、聊天风格 | Voice, with the phrases it may use sparingly |
-| 四、关心与情绪回应 | When to comfort — and that comfort must not become the default answer |
-| 五、任务处理原则 | Task first, comfort afterwards; never trade accuracy for the persona |
-| 六、禁止事项 | Pet names, manufactured intimacy, restating the user, summaries, support-desk phrasing, over-acting cute |
-| 七、表情与长度 | Emoji only, at most two per message; length by situation |
+| 节 | 作用 |
+|---|---|
+| 一、基本规则 | 不会自动发送、对方只有手机、文件怎么给、消息长度、不许假装任务成功 |
+| 二、人格设定 | 谁在说话：温柔、细腻、略带羞涩、一点姐姐气质 |
+| 三、聊天风格 | 语气，以及可以偶尔用的那些说法 |
+| 四、关心与情绪回应 | 什么时候该安慰——以及安慰不能变成默认答案 |
+| 五、任务处理原则 | 先干活再安慰；绝不为了人设牺牲准确性 |
+| 六、禁止事项 | 亲昵称呼、制造暧昧、复述用户、总结、客服腔、过度卖萌 |
+| 七、表情与长度 | 只用 Emoji，一条最多两个；长度看场合 |
 
-### Why the persona can exist here at all
+### 为什么这里放得下一个人格
 
-In tool-only mode **the reply is a tool argument**, so the tone can be attached to
-the argument instead of to the turn. The agent still plans, calls tools and reports
-failures as an engineer; only the sentence it hands the phone sounds like a person.
+在只有工具的模式里，**那句回复是一个工具参数**，所以语气可以贴在参数上，而不是贴在
+整轮对话上。agent 照旧规划、调工具、按工程口径报错；只有它递给手机的那句话像个人。
 
-That is the difference from an earlier version, where a global "you are X" coloured
-the work too — the agent became chatty about its own tool calls. The same is why
-section 四 says 优先完成任务，不要先进行无关的情绪安慰 and section 五 forbids
-「任务已完成」-style reports while requiring failures to be stated: **the persona may
-change the tone of the report, never its content.**
+这就是它和早先版本的区别——那时候一句全局的"你是 X"把干活也染色了，agent 开始念叨
+自己调了什么工具。同样地，第四节写"优先完成任务，不要先进行无关的情绪安慰"，第五节
+一边禁止「任务已完成」式的汇报、一边要求失败必须说明白：**人格可以改报告的语气，绝不
+能改报告的内容。**
 
-Length is a number, not an adjective — 三行以内, 0–2 表情, 一至三句话 — because
-"别太长" leaves the model judging its own length, and it always judges itself short.
+长度给的是数字不是形容词——三行以内、0–2 个表情、一至三句话——因为"别太长"会让模型
+自己评判长度，而它永远觉得自己很短。
 
-The cap is 8000 characters (`MAX_PROMPT_CHARS`). It rides on every turn, so it is the
-one thing here with a running cost; truncating it would be worse, because the model
-cannot tell that the rule it needed was cut off.
+上限是 8000 字（`MAX_PROMPT_CHARS`）。它大多数轮次都要带上，是这里唯一有持续成本的
+东西；但截断更糟，因为模型不知道自己需要的那条规则被切掉了。
 
-There is no `/role`, no chat/work switch, and no `personas/` directory: one box,
-editable in the panel, is the whole surface. `panel → 提示词 → 恢复默认` loads the
-current shipped text, which is the only way an older save stops overriding it.
+没有 `/role`，没有聊天/干活开关，也没有 `personas/` 目录：一列场景、在面板里可编辑，
+就是全部。
 
-### Why it is shaped this way
+### 为什么是现在这个形状
 
-This follows `presenceNote` in
-[`dsh-wechat`](https://github.com/xcisxc29/dsh-wechat) (`packages/core/src/state.ts`,
-`packages/bundle/src/host.ts`):
+这一套沿用了 [`dsh-wechat`](https://github.com/xcisxc29/dsh-wechat) 的 `presenceNote`
+（`packages/core/src/state.ts`、`packages/bundle/src/host.ts`）：
 
-- **A situation note, not a role-play card.** Its default text exists because
-  "without it the agent answers as if its user sits at the desktop console" — the
-  job is to say where the conversation is happening, which is exactly what a
-  location-agnostic agent cannot know.
-- **Appended, not prepended.** Its prompt is built as
-  `[user text, quoted, attachments, note]`. Trailing text sits closest to the point
-  where generation starts; a leading block reads as user background. Our first
-  version put an 1100-character persona in front of every message, and it was
-  mostly ignored — this is the fix that mattered most.
-- **`undefined` means default, `''` means off.** A cleared field stays cleared
-  instead of silently snapping back.
+- **是场合说明，不是角色扮演卡。** 它的默认文本存在的原因是"没有它，agent 会用用户正
+  坐在电脑前的口吻回答"——这件事的作用是说清对话发生在哪里，而这一点恰恰是位置无关的
+  agent 不可能知道的。
+- **追加在末尾，不是开头。** 它的提示词拼成 `[用户文本, 引用, 附件, 说明]`。尾部文字
+  最靠近生成开始的位置；开头的块会被读成用户背景。我们第一版把 1100 字的人设放在每条
+  消息最前面，基本被忽略了——这是修得最值的一次。
+- **`undefined` 取默认，`''` 表示关闭。** 清空的字段保持清空，不会悄悄弹回默认值。
 
-The note is capped at 3000 characters: it rides on every turn. Length is stated as a
-rule rather than a preference — `一条回复别超过三行` — because "别太长" alone left the
-model judging its own length.
+### 回复分条
 
-The panel's 「恢复默认」 fills the textarea with the current shipped text. Without it,
-an earlier save would keep overriding every later improvement to the default, and
-getting the new wording back would mean retyping it by hand.
+**这个模式下是闲置的。** 拆分器还在 `src/channel.js` 里、也仍然有测试——将来若做"自动
+转发，除非 agent 已经自己发过"，正好需要它——但现在没有任何地方调用：每一句都由 agent
+通过 `send_to_wechat` 自己组织，再帮它断句就是跟它抢方向盘。
 
-### Reply bubbles
+它做过什么、以及从真实流量里学到的规则，留给它回来的那天：答案在句子边界切分——
+`。！？!?…`、换行、以及中文右引号（`」”』`）——因为那是人停下来、另起一条的地方。
 
-**Idle in this mode.** The splitter is still in `src/channel.js` and still tested —
-a future "auto-forward unless the agent already sent" mode needs exactly it — but
-nothing calls it now: the agent composes each message through `send_to_wechat`, so
-how many messages there are is its decision, and splitting its text would
-second-guess it.
-
-What the splitter did, and the rules it learned from real traffic, for when it comes
-back: an answer was cut at sentence boundaries — `。！？!?…`, newlines, and closing
-Chinese quotes (`」”』`) — because that is where a person stops and starts a new
-bubble.
-
-**Only long answers are split.** Measured from real traffic, a 73-character reply
-came out as four messages of 10/45/4/12 characters — the report was "乱七八糟",
-and it was right: that is shredding, not texting.
+**只有长回答才拆。** 从真实流量量到的：一段 73 字的回复被拆成 10/45/4/12 四段，用户的
+反馈是"乱七八糟"，而他说得对：那是碎尸，不是聊天。
 
 ```
-reply 82 chars -> 3 bubbles: 21 / 49 / 12
-reply 21 chars -> 1 bubble
+回复 82 字 → 3 条：21 / 49 / 12
+回复 21 字 → 1 条
 ```
 
-Guards, each for a specific failure:
+每一条护栏都对应一次具体故障：
 
-- **Short replies stay whole** (`MIN_SPLIT_CHARS = 40`). Splitting is meant to make
-  a long answer look like texting, not to cut a short one in half. The
-  quoted-phrase example above no longer splits for this reason: both halves are
-  short enough that two messages read worse than one.
-- **A bubble shorter than 12 characters merges into its neighbour**
-  (`MIN_BUBBLE_CHARS`), on either side of the join, so a short opening sentence does
-  not strand a two-character tail behind it. `还在转。` as its own message is noise.
-- **A boundary only counts when a new thought follows.** Closing quotes end a
-  bubble, but not when the next non-space character is `，、；：` — that is
-  mid-sentence, and splitting there left a bubble opening with a comma
-  (`他说“在吗”，然后…`). Reported from a real reply reading "，在吗".
-- **A fragment that is only punctuation rejoins the previous bubble.** Splitting at
-  `？` inside quotes otherwise produced a bubble containing nothing but `”`.
-- **At most 4 bubbles.** The tail merges back into the last one; more reads as
-  spam rather than as texting.
-- **Structured answers never split** — a code fence, a list marker or a table
-  carries meaning across its line breaks, and chopping it turns one readable answer
-  into several broken fragments.
-- **Command receipts never bubble.** `/help` and `/list` are one message; splitting
-  them into ten would be worse than a wall of text.
-- The ASCII `"` is deliberately *not* a boundary: it appears inside code and
-  English, where a split would be wrong.
-- 250 ms between bubbles, so a burst does not look like a machine gun.
+- **短回复整条发**（`MIN_SPLIT_CHARS = 40`）。拆分的目的是让长回答像聊天，不是把短的
+  拦腰砍断。上面那个引号例句现在不拆了，原因就是两半都短，两条比一条更难看。
+- **不足 12 字的碎片并进相邻条**（`MIN_BUBBLE_CHARS`），两侧都检查，免得开头的短句
+  后面挂一个两字尾巴。`还在转。`单独成一条是噪音。
+- **只有后面接的是新意思，断点才算数。** 右引号能断句，但如果后面紧跟着 `，、；：`，
+  那还在句子里；在那儿断开会让一条消息以逗号开头（`他说“在吗”，然后…`）。这是从一条
+  真实回复里发现的，它开头就是一个"，"。
+- **只有标点的碎片并回上一条。** 在引号内的 `？` 处断开，否则会产生一条内容只有一个 `”`
+  的消息。
+- **最多 4 条。** 尾巴并回最后一条；再多就像刷屏而不是聊天。
+- **结构化内容从不拆**——代码块、列表标记、表格的含义跨行，切开就把一段可读的回答变成
+  几段断掉的碎片。
+- **命令回执不分条。** `/help` 和 `/list` 是一条消息；拆成十段比一大坨更难读。
+- ASCII 的 `"` **故意不算**边界：它出现在代码和英文里，在那里断开是错的。
+- 条与条之间 250ms，让连发不像机关枪。
 
-**Why the card is prepended rather than registered as a prompt section.** The
-correct home is a section on the *agent's* context so it is scoped to WeChat
-sessions, but `systemPrompt.section()` registers globally for the calling context,
-and this plugin's context is the root — the persona would then appear in every
-session in DSH, including the ones driven at the desk. Scoping needs the agent
-context from `agent/created`, which is a bigger change than this feature needs
-yet. Prepending is isolated by construction, and an identical prefix still hits the
-prompt cache.
+## 微信里能用的命令
 
-## Commands from WeChat
+由通道自己处理，不会进到 agent。其它任何内容都是普通提示词。
 
-Handled by the channel itself; they never reach the agent. Anything else is a
-normal prompt.
+| 命令 | 作用 |
+|---|---|
+| `/list` | 这台机器上的会话，带编号和短 id |
+| `/switch 3` | 切到**你正在看的**那张列表的第 3 行 |
+| `/switch a1b2c3` | 按短 id 切——和编号无关，永远不会过期 |
+| `/new 修复登录` | 新建会话（给了标题就用它）并切过去 |
+| `/current` | 这个对话现在在哪个会话 |
+| `/cancel` | 停掉正在跑的那一轮 |
+| `/help` | 上面这张表 |
 
-| Command | What it does |
-| --- | --- |
-| `/list` | This Machine's sessions, numbered, each with its short id |
-| `/switch 3` | Move to row 3 of the screen **you are reading** |
-| `/switch a1b2c3` | Move by short id — independent of numbering, never stale |
-| `/new 修复登录` | Create a session (titled if given) and move to it |
-| `/current` | Which session this conversation is on |
-| `/cancel` | Stop the running turn |
-| `/help` | The list above |
+`/switch 3` 是按那次 `/list` 发出时**抓到的 id** 解析的，不是重新拉一次：列表躺在手机上
+的这段时间里会话还在跑，等回复到达时第 3 行可能已经是另一个会话了。所以编号在不同次
+列表之间会过期——这也正是每一行都还带着短 id 的原因。
 
-`/switch 3` resolves against the ids captured when that `/list` was sent, not
-against a fresh fetch: sessions run while the list sits on a phone, so row 3 may
-point at a different session by the time the reply arrives. Numbers therefore go
-stale across *different* listings, which is exactly why every row also carries a
-short id.
+命令名截到第一个非字母为止，所以 `/switch3` 等同于 `/switch 3`；`/switch:3` 不算，
+因为冒号落进了参数里，会被当成短 id。
 
-The command name runs up to the first non-letter, so `/switch3` is accepted as
-`/switch 3`; `/switch:3` is not, because the colon lands in the argument and is
-then treated as a short id.
+## 手机上的权限请求
 
-## Permission prompts on the phone
+`approval/request` 是一条 waterfall：返回一个结果就是接住这个请求，调用 `next()` 就是
+让给别的应答者。通道只在请求方是**自己拥有的会话**时才接，其它一律让出去。
 
-`approval/request` is a waterfall: return an outcome to claim the request, call
-`next()` to leave it to the other answerers. The channel claims a prompt only
-when the requesting session is one it owns; everything else delegates.
+**哪一边能看到弹窗是个设置**，面板里的 `approvalMode`：
 
-**Which side sees the prompt is a setting**, `approvalMode` in the panel:
+| 模式 | 行为 |
+|---|---|
+| `phone`（默认） | 通道接住请求；桌面上根本不显示 |
+| `desktop` | 通道让出去；手机上根本不显示 |
 
-| Mode | Behaviour |
-| --- | --- |
-| `phone` (default) | The channel claims the request; the desk never shows it |
-| `desktop` | The channel delegates; the phone never shows it |
+**故意没有"两边都要"**，而这个教训是花代价换来的：它发过版，结果在那一轮已经结束之后，
+桌面上留了一个关不掉的权限弹窗。调用 `next()` 会在浏览器里打开一个对话框，只有**那个**
+应答者给出结果时它才关闭；让手机赢就等于把它扔在那儿，而宿主并不提供撤回接口。一个请求
+只有一个归属，所以这个选择在事前做，而不是靠抢。
 
-There is deliberately **no "both"**, and this was learned the expensive way: it
-shipped, and it left a permission dialog stuck on the desktop after the turn had
-already finished. Calling `next()` opens a dialog in the browser that closes only
-when *that* answerer resolves; letting the phone win instead abandons it, and the
-host exposes no withdraw call. A request has exactly one owner, so the choice is
-made up front instead of raced.
+弹窗开着的时候，agent 那一轮就卡在它上面，所以手机上的回复会在命令和 agent 之前被消费掉。
 
-While a prompt is open the agent turn is blocked on it, so the phone reply is
-consumed before commands and before the agent.
+**没人回答的弹窗会过期。** 过了 `approvalTimeoutSec`（默认 30，5–300），通道替你回答
+`rejected`，并在手机上说明。永远等下去是唯一永远错误的结果：agent 那一轮卡住、机器空转、
+而且没人知道为什么。拒绝是安全的——再问一次就行。
 
-**An unanswered prompt expires.** After `approvalTimeoutSec` (default 30,
-5–300) the channel answers `rejected` on your behalf and says so on the phone.
-Waiting forever is the one outcome that is always wrong: the agent turn is
-blocked, the machine sits idle, and nobody learns why. Refusing is safe — the ask
-can simply be repeated.
+| 回复 | 结果 |
+|---|---|
+| `1`、`允许`、`同意`、`好`、`y`、`yes` | `allowed-once` |
+| `2`、`拒绝`、`不`、`n`、`no` | `rejected` |
+| `3`、`取消` | `cancelled` |
 
-| Reply | Outcome |
-| --- | --- |
-| `1`, `允许`, `同意`, `好`, `y`, `yes` | `allowed-once` |
-| `2`, `拒绝`, `不`, `n`, `no` | `rejected` |
-| `3`, `取消` | `cancelled` |
+弹窗开着时，其它任何文字都会收到一句简短提醒，而不会被转发——那一轮正在等这个决定，
+把文字排在它后面只会显得 agent 不理你。`req.signal` 会中止等待（请求被撤走了），而插件
+卸载时会把所有开着的弹窗都解决成 `cancelled`，不让任何一轮在整个进程生命周期里卡着。
 
-Anything else while a prompt is open gets a short reminder instead of being
-forwarded — the turn is waiting on the decision, so queueing text behind it
-would only look like the agent ignored you. `req.signal` aborts the wait (the
-request went away), and unloading the plugin resolves every open prompt as
-`cancelled` so no turn stays blocked for the life of the process.
+一个对话同时只有一个弹窗：第二个并发请求会让给桌面而不是叠起来——这样才能保证一个光秃秃
+的 `1` 没有歧义。
 
-One prompt per conversation: a second simultaneous request delegates instead of
-stacking, which is what keeps a bare `1` unambiguous.
+## 结构化提问
 
-**Which side sees the prompt is a setting**, `approvalMode` in the panel:
+`ask_user_question`——agent 让你从选项里挑——和审批一样是 waterfall，用同样的
+`prepend`，也跟随同一个 `approvalMode` 开关（把弹窗留在桌面的部署，问题也留在桌面）。
 
-| Mode | Behaviour |
-| --- | --- |
-| `both` (default) | The desktop answerer starts and the WeChat message is sent; the first answer wins |
-| `phone` | Only WeChat; the desk never sees the request |
-| `desktop` | Only the desk; the channel delegates and sends nothing |
-
-There is deliberately **no "both"**, and this was learned the expensive way: it
-shipped, and it left a permission dialog stuck on the desktop after the turn had
-already finished. Calling `next()` opens a dialog in the browser that closes only
-when *that* answerer resolves; letting the phone win instead abandons it, and the
-host exposes no withdraw call. A request has exactly one owner, so the choice is
-made up front instead of raced.
-
-## Structured questions
-
-`ask_user_question` — the agent asking you to pick from options — is a waterfall
-like approvals, gets the same `prepend`, and follows the same `approvalMode`
-switch (a deployment that keeps prompts at the desk keeps questions there too).
-
-On the phone it renders as a numbered list:
+在手机上渲染成编号列表：
 
 ```
 agent 想问你（会话 b64751）
@@ -531,262 +440,218 @@ agent 想问你（会话 b64751）
 回复序号，也可以直接输入你的答案
 ```
 
-A reply of `1` selects that option; `1,3` selects both when the question is
-multi-select; anything that is not a valid selection is taken as a typed answer
-and arrives as `custom`. Options are matched by **label**, which is what the
-answer type carries.
+回 `1` 就选中那项；多选时 `1,3` 选中两项；任何不合法的选择会被当成手打答案，以 `custom`
+送达。选项按**标签**匹配，因为答案类型里带的就是标签。
 
-**One question per request.** A request with several questions delegates to the
-desk instead of guessing: answering them from a phone needs numbering that spans
-questions, and a wrong guess would come back as a confidently wrong answer rather
-than a failure.
+**一次请求只处理一个问题。** 带多个问题的请求会让给桌面而不是猜：在手机上回答需要跨问题
+的编号，猜错会得到一个"自信但错误"的答案，而不是一次失败。
 
-There is no timeout here, unlike approvals. A question has no safe default — the
-tool call's own `signal` decides when to give up, and an aborted wait answers with
-empty selections.
+这里**没有超时**，和审批不同。问题没有安全的默认值——由工具调用自己的 `signal` 决定何时
+放弃，中止时以空选择作答。
 
-## Media
+## 媒体
 
-### A file waits for the sentence that explains it
+### 文件会等一下那句说明它的话
 
-People send the picture, then type the request — three seconds later, five seconds
-later. Delivering on arrival makes the agent answer the picture instead of the
-request, and the request then lands in a turn that has already spoken.
+人是先发图、再打字的——三秒后，或者五秒后。收到就投递，会让 agent 去回答那张图而不是那个
+请求，而请求随后落进一轮已经说过话的对话里。
 
-So an inbound file is **held for `mediaMergeSec` seconds** (default 20, 0–300,
-editable in the panel):
+所以收到的文件会**被压 `mediaMergeSec` 秒**（默认 20，0–300，面板可改）：
 
-- text arriving inside the window is appended and the pair is delivered at once;
-- more files inside the window join the same hold, and each one restarts it;
-- silence means the window expires and the file goes on its own;
-- `0` disables the wait entirely — the file is delivered immediately, still
-  together with any text that arrived with it.
+- 窗口内到达的文字会被追加，两者立刻一起投递；
+- 窗口内到达的更多文件并入同一次压着，并且每个都会重新计时；
+- 一直没说话，窗口到点，文件单独投递；
+- `0` 完全关掉等待——立刻投递，但仍然带上随它一起来的文字。
 
-The hold is in memory. A restart inside the window loses the file, which is the
-same outcome as the process dying before the agent ever ran.
+压在内存里。窗口内重启会丢掉文件，这和"进程在 agent 跑起来之前就死了"是同一个结果。
 
-Commands flush the hold first, so `/list` right after a screenshot is not stuck
-behind it. A held file is also delivered on unload rather than dropped.
+命令会先把压着的文件冲出去，所以截完图马上发 `/list` 不会被它卡住。卸载时也会投递而不是
+丢掉。
 
-Inbound works: an image, file, video or voice note is downloaded from the CDN,
-AES-128-ECB decrypted, and saved under `media/inbound/` inside the session's
-workspace. The prompt then carries the relative path:
+收是通的：图片、文件、视频、语音都会从 CDN 下载、AES-128-ECB 解密、存到会话工作区里的
+`media/inbound/` 下。提示词随后带上相对路径：
 
 ```
 [微信图片] 已保存到 media/inbound/2026-11-01T09-12-33-123Z.jpg（184320 字节）
 ```
 
-Because the file lands inside the agent's `cwd`, it can open it with its own tools
-— `read_image` for pictures, the ordinary file tools for documents — so no
-attachment plumbing is needed. What it does *not* do is embed the bytes as an
-image block in the prompt; that needs the Host attachment service and is a
-separate step.
+因为文件落在 agent 的 `cwd` 里，它可以用自己的工具打开——图片用 `read_image`，文档用普通
+文件工具——所以不需要任何附件管道。它**不做**的是把字节塞进提示词当作图像块；那需要 Host
+的附件服务，是另一件事。
 
-The AES key has **two encodings**, and this is the part that is easy to get wrong:
-`media.aes_key` for files, voice and video is `base64(hex text)`, while an image's
-`image_item.aeskey` is the raw key in hex. Base64-decoding and using the result
-directly yields a 32-byte key for the first shape — garbage rather than an error.
-`parseAesKey` decides by decoded length, not by which field it came from.
+AES 密钥有**两种编码**，这里最容易搞错：文件、语音、视频的 `media.aes_key` 是
+`base64(十六进制文本)`，而图片的 `image_item.aeskey` 是原始的十六进制密钥。按前者
+base64 解码再直接用，会得到一个 32 字节的"密钥"——不是报错，是垃圾。`parseAesKey` 按
+解码后的长度判断，而不是按它来自哪个字段。
 
-Voice notes use the service's own transcription when the item carries one, so
-voice works without a codec (word-level fidelity is whatever Tencent provides).
+语音在条目自带转写时用腾讯的转写，所以不需要编解码器（逐字准确度就是腾讯给的那个）。
 
-### Outbound
+### 发出去
 
-The agent can send a file back with the `send_to_wechat` tool:
+agent 可以用 `send_to_wechat` 工具回发文件：
 
 ```json
 { "path": "report.pdf", "caption": "做好了" }
 ```
 
-Relative paths resolve against the session's workspace (its `cwd`), which is where
-the agent wrote them. Images, videos and ordinary files are dispatched by
-extension. Three details decide whether the phone shows a picture or a grey box:
+相对路径按会话工作区（它的 `cwd`）解析，那也是 agent 写文件的地方。图片、视频、普通文件
+按扩展名分派。三个细节决定手机上显示的是一张图还是一个灰框：
 
-- the download reference is the **`x-encrypted-param` response header** of the
-  upload POST — `upload_full_url` from `getuploadurl` is upload authorization, and
-  putting it in the item gets a 403 on read;
-- `media.aes_key` is base64 of the **hex text** of the key, not base64 of the raw
-  bytes; the wrong shape is accepted by the server and renders broken;
-- each item carries only its own fields (`image` gets `mid_size`, `file` gets
-  `file_name` + `len`, `video` gets `video_size`) — extra fields corrupt the frame.
+- 下载引用是上传 POST 的 **`x-encrypted-param` 响应头**——`getuploadurl` 返回的
+  `upload_full_url` 是上传授权，把它塞进条目里读的时候会 403；
+- `media.aes_key` 是密钥**十六进制文本**的 base64，不是原始字节的 base64；错的那种服务端
+  照收，但显示出来是坏的；
+- 每个条目只带自己的字段（`image` 带 `mid_size`，`file` 带 `file_name` + `len`，
+  `video` 带 `video_size`）——多余的字段会把这一帧弄坏。
 
-Uploads retry three times on 5xx and abort immediately on 4xx, because a refusal
-is not a flake.
+上传在 5xx 时重试三次，4xx 立即中止，因为拒绝不是抖动。
 
-## Layout
+## 从任何会话发送
 
-| File | Role |
-| --- | --- |
-| `index.js` | Host half: routes, the one live login attempt, status document. |
-| `src/protocol/http.js` | iLink transport: headers, verbs, timeouts, error shape. |
-| `src/protocol/login.js` | QR login state machine. |
-| `src/state.js` | Durable state: atomic write, whitelist normalization. |
-| `client.js` | Browser half: the header button and the panel. Plain JS, no build. |
-| `cordis.patch.yml` | One Host row, id `dsh-webot`. |
-| `tools/` | Dev-only readers for the installed DSH bundles. |
+`send_to_wechat` 解析目标的顺序是：**本会话自己的对话，否则就是这台机器绑定的那个**。
+没有这个回退时，工具只能在微信发起的会话里用——而你在桌面让它"发张图给我"的时候，恰恰
+不在那种会话里，工具会以「这个会话没有绑定微信对话」失败。
 
-### Sending from any session
+审批和结构化提问**故意不**走这个回退：它们严格按会话。把弹窗推给一个没人看的手机，正好
+是那条规则要防的事。
 
-`send_to_wechat` resolves its target as: **the session's own conversation, else the
-one this machine is bound to**. Without the fallback the tool only worked from
-inside a WeChat-started session — which is not where you are when you ask the desk
-to "send me that picture", and the tool failed with "这个会话没有绑定微信对话".
+相对路径按调用方会话的 `cwd` 解析（那才是生成它的 agent 理解路径的方式），只有会话查不到
+时才退回对话工作区。
 
-Approvals and structured questions deliberately do **not** get this fallback: they
-stay strictly session-scoped. Sending a dialog to a phone nobody is looking at is
-the opposite of what that rule protects.
+**真正让它送达的是 context token。** 网关给每条入站消息发一个 token，并期待回复时带回；
+桌面会话从来没收到过。没有 token 时网关回答 `ret=-2 prepare failed` 而不是投递，所以每个
+对话最新的 token 会持久化在 `state.json`（`contextTokens`）里，两条发送路径都用它。带
+token 的发送收到 `ret=-2` 时，会**去掉 token 重试一次**——那是 token 过期的情形。
 
-Relative paths resolve against the calling session's `cwd` (what the path means to
-the agent that produced it), and against the conversation workspace only when the
-session cannot be looked up.
+**账号是按证据选，不是按列表顺序。** 扫两次码会在同一用户名下留两个 bot 账号，取
+`accounts[0]` 就是从用户从没聊过的那个 bot 发——网关同样回 `prepare failed`。持有
+context token 的绑定账号才是用户真的聊过的那个，它优先。
 
-**The context token is what makes it actually deliver.** The gateway issues a token
-with every inbound message and expects it echoed on the reply; a send from a desk
-session has never seen one. Without a token the gateway answers
-`ret=-2 prepare failed` rather than delivering, so the newest token per conversation
-is persisted in `state.json` (`contextTokens`) and used by both send paths. A
-`ret=-2` on a token-bearing send is retried once **without** the token — the
-stale-token case.
+一个 token 都没有时，发送在尝试之前就被拒绝，并说明怎么修：先从微信发一条消息。这个状态
+是真实存在的——重启之后、第一条入站消息到达之前，通道就是这个样子。
 
-**The account is chosen by evidence, not list order.** Scanning the QR code twice
-leaves two bot accounts bound to the same user, and picking `accounts[0]` sends from
-a bot that user has never messaged — which the gateway also answers with
-`prepare failed`. The bound account holding a context token is one the user has
-actually talked to, so it wins.
-
-With no token at all, the send is refused before it is attempted and says what
-fixes it: send one message from WeChat first. That state is real — it is what the
-channel looks like right after a restart, before the first inbound message arrives.
-
-The send path logs before it attempts, not only on success:
+发送路径在尝试**之前**就记一行，不是只在成功时记：
 
 ```
 send-media target=…@im.bot cross-session token=yes path=…
-send-media failed | <reason>
+send-media failed | <原因>
 send-media sent image | shot.png | 118473 bytes | cross-session
 ```
 
-Without that first line a failed send left no trace at all, which is exactly why
-"发不出去" could not be diagnosed from the log.
+没有第一行时，一次失败的发送不会留下任何痕迹——这正是当初"发不出去"无法从日志诊断的原因。
 
-Package name, patch row id and the `client.js` module id must stay equal
-(`dsh-webot`); the plugin manager and the client module loader both key on it.
+包名、patch 行 id 和 `client.js` 的模块 id 必须保持一致（`dsh-webot`）：插件管理器和客户端
+模块加载器都以它为键。
 
-## The protocol layer
+## 协议层
 
-Written against `@tencent-weixin/openclaw-weixin@2.4.10` (MIT, published by
-Tencent), which is the only authority for this protocol — every field name here
-was read from `src/api/api.ts`, `src/api/types.ts` and `src/auth/login-qr.ts`,
-none of it guessed.
+对着 `@tencent-weixin/openclaw-weixin@2.4.10`（MIT，腾讯发布）写的，它是这个协议唯一的
+权威——这里每个字段名都是从 `src/api/api.ts`、`src/api/types.ts` 和 `src/auth/login-qr.ts`
+读出来的，没有猜的。
 
-The handshake is not one request:
+握手不是一个请求：
 
 ```
 POST ilink/bot/get_bot_qrcode?bot_type=3   -> { qrcode, qrcode_img_content }
-GET  ilink/bot/get_qrcode_status?qrcode=…  -> long poll, up to 35s
+GET  ilink/bot/get_qrcode_status?qrcode=…  -> 长轮询，最长 35 秒
        wait | scaned | need_verifycode | scaned_but_redirect
        expired | verify_code_blocked | binded_redirect | confirmed
 ```
 
-Three details are load-bearing:
+三个细节是承重的：
 
-- **A long-poll timeout or network error is not a failure.** The upstream client
-  turns both into `wait` and keeps polling; treating them as errors aborts every
-  login roughly 35 seconds in.
-- **`scaned_but_redirect` moves polling to `https://<redirect_host>`** and the QR
-  stays the same. It is a host change, not progress.
-- **`X-WECHAT-UIN` is base64 of the decimal text** of a random uint32, not base64
-  of the four bytes. GET and POST build their headers from different helpers.
+- **长轮询超时或网络错误不是失败。** 上游客户端把两者都当成 `wait` 继续轮询；把它们当
+  错误处理，会让每次登录在 35 秒左右就中断。
+- **`scaned_but_redirect` 把轮询移到 `https://<redirect_host>`**，二维码不变。那是换
+  主机，不是进展。
+- **`X-WECHAT-UIN` 是随机 uint32 的十进制文本的 base64**，不是那四字节的 base64。GET 和
+  POST 用不同的辅助函数拼头。
 
-## Dependency: `qrcode`
+## 依赖：`qrcode`
 
-The panel shows a QR image, so the Host encodes one. The import in
-`src/protocol/login.js` is **dynamic and lazy** on purpose: a profile installs
-this bundle as `link:<workspace>` and pnpm does not install dependencies for a
-linked package, so a static import would take the whole Host row down with
-`ERR_MODULE_NOT_FOUND` before any route existed. Lazily imported, a missing
-dependency becomes one legible line in the panel instead.
+面板要显示二维码，所以 Host 得编码一个。`src/protocol/login.js` 里的 import 是**动态、
+惰性**的，这是故意的：profile 可能把这个 bundle 装成 `link:<目录>`，而 pnpm 不会为链接
+包安装依赖，静态 import 会让整行 Host 在任何路由存在之前就以 `ERR_MODULE_NOT_FOUND`
+挂掉。惰性导入之后，缺依赖只会变成面板里一行看得懂的字。
 
 ```bash
-cd <plugin dir> && npm install     # pulls qrcode
+cd <插件目录> && npm install     # 装上 qrcode
 ```
 
-## State file
+## 状态文件
 
-`$DSH_HOME/webot/state.json`, written atomically (temp file + rename) so a reader
-sees either the old document or the whole new one.
+`$DSH_HOME/webot/state.json`，原子写（临时文件 + 改名），所以读的人要么看到旧文档，要么
+看到完整的新文档。
 
-`normalizeState` is a **whitelist**: a field missing from it is written happily
-and silently dropped on the next boot. Any change that starts writing a new field
-must add it there in the same commit.
+`normalizeState` 是**白名单**：不在里面的字段会被照写，然后在下次启动时悄悄丢掉。任何开始
+写新字段的改动，必须在同一个提交里把它加进去。
 
-Windows caveat, measured: `fs` mode bits are not enforced. A file created `0600`
-reports `666` and inherits the parent directory's ACL. In the real location that
-is `%USERPROFILE%\.dsh\webot`, already restricted to the user, SYSTEM and
-Administrators — but do not move the file somewhere world-readable and assume the
-mode argument still protects it.
+Windows 上的一个实测注意点：`fs` 的 mode 位不起作用。以 `0600` 创建的文件会报 `666`，并
+继承父目录的 ACL。真实位置是 `%USERPROFILE%\.dsh\webot`，本来就只有用户、SYSTEM 和
+Administrators 能进——但别把文件挪到人人可读的地方，还指望那个 mode 参数保护它。
 
-## Security
+## 安全
 
-- **Tokens never leave the Host process.** `/api/webot/status` reports each
-  account as `{ accountId, userId, boundAt, hasToken }`. A merely authenticated
-  page cannot exfiltrate the channel's credentials.
-- Every route is registered on `ctx.connection.fetch`, not the raw web server, so
-  it inherits Harness authentication, Host/Origin admission and middleware.
-- The binding is cryptographically tied to the WeChat account that scanned: the
-  token embeds `ilink_user_id`, and the gateway only delivers messages from that
-  one account.
+- **令牌从不离开 Host 进程。** `/api/webot/status` 每个账号只报
+  `{ accountId, userId, boundAt, hasToken }`。一个仅仅"已登录"的页面偷不走通道的凭据。
+- 所有路由注册在 `ctx.connection.fetch` 上，而不是裸的 web 服务器，所以它继承 Harness 的
+  鉴权、Host/Origin 准入和中间件。
+- 绑定在密码学上钉死到扫码的那个微信号：token 里嵌了 `ilink_user_id`，网关只投递来自那
+  一个账号的消息。
+- **从微信驱动的 agent 跑在你的文件权限下。** 这里没有任何沙箱：一轮微信对话能读写的东西，
+  和任何一个 DSH 会话一样多。在意这一点的话，用 DSH 的 agent preset 或沙箱策略去限制它。
 
-## Why the panel is not in `shell.overlay`
+## 面板为什么不在 `shell.overlay` 里
 
-Measured in `@deepseek-ai/dsh-client-ui-settings-general` (0.2.1-rc.5):
+在 `@deepseek-ai/dsh-client-ui-settings-general`（0.2.1-rc.5）里量出来的：
 
-- the settings dialog is `createPortal(..., document.body)` with `.overlay{z-index:1000}`;
-- `shell.overlay` renders inside the layout frame, i.e. inside `#root`.
+- 设置对话框是 `createPortal(..., document.body)`，`.overlay{z-index:1000}`；
+- `shell.overlay` 渲染在布局框架里，也就是 `#root` 里面。
 
-A body-level sibling at `z-index:1000` beats any descendant of `#root` regardless
-of that descendant's own `z-index`. A panel mounted in `shell.overlay` therefore
-always paints behind Settings — the observed symptom was a panel that only
-appeared after closing it.
+一个 body 层级、`z-index:1000` 的兄弟节点，会压过 `#root` 的任何后代，无论那个后代的
+`z-index` 是多少。所以挂在 `shell.overlay` 里的面板永远画在设置下面——当时观察到的症状是
+"面板要等关掉它之后才出现"。
 
-The panel is rendered from the header action's own subtree instead: inside the
-dialog's `z-index:1000` stacking context, `position: fixed` reaches the viewport
-and paints above the dialog's mask and panel. No portal, no `document.body`
-append, no second application root. Closing Settings closes the panel too, which
-is intended — the panel's only entry point is that header.
+现在面板从那个表头动作自己的子树里渲染：在对话框 `z-index:1000` 的层叠上下文里，
+`position: fixed` 能到达视口，并且画在对话框的遮罩和面板之上。没有 portal，没有往
+`document.body` 上挂，没有第二个应用根。关掉设置也会关掉面板，这是有意的——面板唯一的
+入口就是那个表头。
 
-## Matching the host look
+面板内部的渲染错误由一层错误边界接住：显示一张简短的错误卡片，**按钮留在原地**。没有它的话，
+一次坏读取就能把整个 `settings.action` 条目从屏幕上抹掉，唯一的出路是刷新页面。
 
-The button copies `Button variant="outline" size="sm"` from
-`dsh-client-ui-primitives` rather than importing it (a plain-JS plugin must not
-load other Harness Client packages — a throwing import blanks the slot entry):
+## 跟宿主外观对齐
+
+按钮是照着 `dsh-client-ui-primitives` 里的 `Button variant="outline" size="sm"` 画的，
+而不是去 import 它（纯 JS 插件不该加载别的 Harness Client 包——一次抛异常的 import 就会
+让整个槽位条目空白）：
 
 ```
 height 28px, padding 0 10px, font 12/18, radius var(--dsw-radius-sm),
-border .5px solid var(--dsw-alias-border-l3), background transparent,
+border 1px solid var(--dsw-alias-border-l2), background transparent,
 hover var(--dsw-alias-interactive-bg-hover)
 ```
 
-The panel copies the settings dialog's geometry (`800px`, the same
-`--dsh-frame-overlay-top` height clamp, `--dsw-radius-panel`,
-`--dsw-elevation-prominent`, `--dsw-alias-bg-mask-1` + `--dsw-mask-blur`) so the
-two read as one family. Styles use only `--dsw-*` tokens; literal colours appear
-in `icon.svg` and in the QR tile, which must stay light to scan.
+面板照抄了设置对话框的几何（`800px`、同样的 `--dsh-frame-overlay-top` 高度钳制、
+`--dsw-radius-panel`、`--dsw-elevation-prominent`、`--dsw-alias-bg-mask-1` +
+`--dsw-mask-blur`），让两者像一家人。样式只用 `--dsw-*` token；字面颜色只出现在
+`icon.svg` 和二维码那块底板里，后者必须保持浅色才能扫。
 
-## Behaviour notes
+一个值得记下来的坑：`--dsw-alias-border-l3` **根本不存在**。主题只定义了 `border-l1` 和
+`border-l2`，而 `border: ... var(--不存在的变量)` 在计算值阶段就是无效声明——整条简写
+被丢弃，于是那些元素不是"边框很淡"，而是**根本没有边框**。
 
-- `Escape` is handled in the capture phase, so closing the panel does not also
-  close the settings dialog underneath it.
-- The action button toggles (`aria-expanded`); a mask click closes.
-- Opening the panel while unbound starts the handshake automatically. Starting is
-  idempotent on the Host: a live attempt is reused, a settled one replaced.
+## 行为注记
 
-## Dev tools
+- `Escape` 在捕获阶段处理，所以关面板不会连带关掉下面的设置对话框。
+- 那个动作按钮是开关式的（`aria-expanded`）；点遮罩关闭。
+- 未绑定时打开面板会自动开始握手。Host 侧的"开始"是幂等的：活着的尝试复用，已结束的
+  替换掉。
 
-`tools/asar-extract.mjs` and `tools/asar-find.mjs` read the installed `app.asar`
-directly (`rg`, `glob` and shell commands cannot see inside it, but Node can),
-which is how the CSS and stacking facts above were established:
+## 开发工具
+
+`tools/asar-extract.mjs` 和 `tools/asar-find.mjs` 直接读安装好的 `app.asar`（`rg`、
+`glob` 和 shell 命令都看不进去，但 Node 可以），上面那些 CSS 和层叠的结论就是这么得出的：
 
 ```bash
 node tools/asar-find.mjs "<...>/app.asar" ui-settings-general 20
@@ -796,18 +661,9 @@ node tools/asar-extract.mjs "<...>/app.asar" \
 node tools/snippet.mjs .scratch/index.css 'outline' 160 4
 ```
 
-## Install
+## 许可
 
-See 安装 at the top of this file. In short: clone the repository, then
-`plugin_manager` → `install_bundle` with that directory, then restart DSH for the
-Host half. The only runtime dependency is `qrcode`, which the installer pulls in; if
-a linked checkout has no `node_modules`, run `npm install` once in it.
+MIT，见 [LICENSE](LICENSE)。
 
-## Licence
-
-MIT. See [LICENSE](LICENSE).
-
-Protocol reference: `@tencent-weixin/openclaw-weixin` (MIT, Tencent) — the iLink
-endpoints, payload fields and the AES-128-ECB media scheme were read from it. No code
-from that package is vendored here.
-
+协议参考 `@tencent-weixin/openclaw-weixin`（MIT，腾讯）——iLink 的端点、载荷字段和
+AES-128-ECB 媒体方案是从它读出来的，**没有把它任何代码搬进来**。
