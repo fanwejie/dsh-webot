@@ -810,7 +810,9 @@ window.__ModuleLoader__.load({
             h('textarea', {
               value: draftChannel === null ? String(status.data.channelPrompt || '') : draftChannel,
               onChange: (event) => setDraftChannel(event.target.value),
-              rows: 5,
+              // Tall enough to read a real prompt: the shipped default is ~260 lines,
+              // and a five-row box makes editing it a scroll hunt.
+              rows: 12,
               'aria-label': t('persona.channelLabel'),
               style: TEXTAREA,
             }),

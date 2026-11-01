@@ -88,44 +88,42 @@ M4 fixes it in two ways:
 
 ## The prompt
 
-One editable note, **appended after the user's message, on every turn**. It has
-three parts, and the order is the priority order:
+One editable note, **appended after the user's message, on every turn**. The shipped
+default is the authored "微信聊天助手" prompt: ~3.3k characters in seven sections,
+and the order is the priority order.
 
-| Part | Purpose |
+| Section | Purpose |
 | --- | --- |
-| The rule | Nothing is auto-sent; a turn that does not call `send_to_wechat` reaches nobody |
-| The channel | A phone, no screen, no file access; how to hand over a file |
-| **The voice** | Who is speaking, and how a message should read |
+| 一、基本身份与工作方式 | The rule that nothing is auto-sent, the phone-only setting, how to hand over a file, and how long a message should be |
+| 二、核心人格设定 | Who is speaking: shy, gentle, a little sisterly, with the voice examples |
+| 三、情绪理解与关心机制 | When to comfort, and the warning that comfort must not become the default answer |
+| 四、不同场景下的回复规则 | Task, question, praise, joking, disagreement, silence — task work comes first, comfort only when that is what was asked |
+| 五、严格禁止的表达方式 | The anti-patterns: pet names, restating the user, summaries, over-promising, support-desk phrasing, hiding failures |
+| 六、表情与消息长度 | Emoji characters only, 0–2 per message; length by situation |
+| 七、最终人格原则 | The summary: don't perform the persona, be useful |
 
-### Why the voice lives here, and why it is scoped
+### Why the persona can exist here at all
 
-The tone block opens with a scope line:
+In tool-only mode **the reply is a tool argument**, so the tone can be attached to
+the argument instead of to the turn. The agent still plans, calls tools and reports
+failures as an engineer; only the sentence it hands the phone sounds like a person.
 
-> 【怎么说话】下面这些只管你写进 send_to_wechat 的 text，怎么干活、调什么工具、按什么
-> 顺序做、报什么错，一律不受影响。
+That is the difference from an earlier version, where a global "you are X" coloured
+the work too — the agent became chatty about its own tool calls. The same is why
+section 四 says 优先完成任务，不要先进行无关的情绪安慰 and section 五 forbids
+「任务已完成」-style reports while requiring failures to be stated: **the persona may
+change the tone of the report, never its content.**
 
-That line is the whole reason a personality can exist in this design. In tool-only
-mode **the reply is a tool argument**, so the tone can be attached to the argument
-instead of to the turn. The agent still plans, calls tools and reports failures as
-an engineer; only the sentence it hands the phone sounds like a person.
+Length is a number, not an adjective — 三行以内, 0–2 表情, 一至三句话 — because
+"别太长" leaves the model judging its own length, and it always judges itself short.
 
-A global "you are 鲸鱼娘" would colour the work too — that is what an earlier
-version did, and it made the agent chatty about its own tool calls. The same cue is
-repeated, shorter, in the `text` parameter's own description, because that is where
-the argument is composed.
-
-What the voice says, in order of how much it matters:
-
-- short: at most two sentences, one if possible;
-- no restating what the user just said, no explaining how it knows, no summaries,
-  no pleasantries;
-- **no "已完成 / 已发送 / 我帮你处理好了" reporting voice** — the result, in plain
-  words;
-- results, errors and decisions still have to be stated clearly, just not in a
-  support-desk tone.
+The cap is 8000 characters (`MAX_PROMPT_CHARS`). It rides on every turn, so it is the
+one thing here with a running cost; truncating it would be worse, because the model
+cannot tell that the rule it needed was cut off.
 
 There is no `/role`, no chat/work switch, and no `personas/` directory: one box,
-editable in the panel, is the whole surface.
+editable in the panel, is the whole surface. `panel → 提示词 → 恢复默认` loads the
+current shipped text, which is the only way an older save stops overriding it.
 
 ### Why it is shaped this way
 
