@@ -619,49 +619,35 @@ window.__ModuleLoader__.load({
      * truncating the name the user is choosing between.
      */
     function Dropdown({ ariaLabel, items, valueId, disabled, onSelect, basis = '260px', minWidth = '180px' }) {
-      // 'closing' exists so the element stays mounted for the exit animation; it is
-      // unmounted by a timer when that animation ends.
+      // 'closing' exists so the element stays mounted while it shrinks away; it is
+      // unmounted by a timer once the transition has had its time.
       const [phase, setPhase] = React.useState('closed')
       const [box, setBox] = React.useState(null)
+      // Drives opacity/transform. Flipped one frame after opening so the browser has a
+      // start value to transition from, and flipped back on close.
+      const [shown, setShown] = React.useState(false)
       const triggerRef = React.useRef(null)
       const selected = items.find((item) => item.id === valueId) || items[0]
 
-      // One stylesheet for every dropdown on the page. Injected when the component
-      // first mounts rather than at module scope, so the factory stays free of DOM
-      // side effects until something actually renders.
+      // Animations here are inline transitions rather than injected keyframes. The
+      // first version injected a <style> guarded by an id, which meant a reloaded
+      // module found the *old* stylesheet, skipped writing, and had no exit rule at
+      // all — the list just sat there and vanished. Inline styles cannot go stale.
+      const reduced =
+        typeof window !== 'undefined' &&
+        typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      const DURATION = reduced ? 0 : 280
+      const CLOSE_MS = DURATION + 20
+
       React.useEffect(() => {
-        if (typeof document === 'undefined') return
-        if (document.getElementById('webot-dropdown-style')) return
-        const style = document.createElement('style')
-        style.id = 'webot-dropdown-style'
-        style.textContent = [
-          '@keyframes webot-dropdown-in {',
-          '  from { opacity: 0; transform: scaleY(0.85) translateY(-4px); }',
-          '  to   { opacity: 1; transform: scaleY(1) translateY(0); }',
-          '}',
-          '@keyframes webot-dropdown-out {',
-          '  from { opacity: 1; transform: scaleY(1) translateY(0); }',
-          '  to   { opacity: 0; transform: scaleY(0.9) translateY(-4px); }',
-          '}',
-          '.webot-dropdown-in {',
-          // Slow on purpose: the list is growing out of the control, not snapping.
-          '  animation: webot-dropdown-in 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;',
-          '}',
-          '.webot-dropdown-out {',
-          // A little quicker than the way in; closing should feel decisive.
-          '  animation: webot-dropdown-out 220ms cubic-bezier(0.4, 0, 1, 1) both;',
-          '}',
-          '@media (prefers-reduced-motion: reduce) {',
-          '  .webot-dropdown-in, .webot-dropdown-out { animation: none; }',
-          '}',
-        ].join('\n')
-        document.head.appendChild(style)
-      }, [])
+        if (phase !== 'open') return undefined
+        const raf = requestAnimationFrame(() => setShown(true))
+        return () => cancelAnimationFrame(raf)
+      }, [phase])
 
-      const CLOSE_MS = 220
-
-      /** Start the exit animation. The element stays until the timer below fires. */
       const close = () => {
+        setShown(false)
         setPhase((current) => (current === 'open' ? 'closing' : current))
       }
 
@@ -674,7 +660,7 @@ window.__ModuleLoader__.load({
         // Reopening inside the window changes the phase and cancels this, which is
         // what makes a second click feel instant instead of waiting out the fade.
         return () => clearTimeout(timer)
-      }, [phase])
+      }, [phase, CLOSE_MS])
 
       /**
        * Measured placement, not `absolute` inside the row: this row sits at the
@@ -759,7 +745,6 @@ window.__ModuleLoader__.load({
               'div',
               {
                 role: 'listbox',
-                className: phase === 'closing' ? 'webot-dropdown-out' : 'webot-dropdown-in',
                 style: {
                   position: 'fixed',
                   left: box.left + 'px',
@@ -778,6 +763,18 @@ window.__ModuleLoader__.load({
                   pointerEvents: phase === 'closing' ? 'none' : 'auto',
                   // Grows away from the control it belongs to.
                   transformOrigin: box.origin,
+                  // The whole animation, in one place: no class, no stylesheet, so a
+                  // stale rule can never leave the element static.
+                  // Shrinks toward the edge it grew from, and the 4px slip points away
+                  // from the trigger on both sides.
+                  opacity: shown ? 1 : 0,
+                  transform: shown
+                    ? 'scaleY(1) translateY(0)'
+                    : `scaleY(0.88) ${box.origin === 'bottom center' ? 'translateY(4px)' : 'translateY(-4px)'}`,
+                  transition: reduced
+                    ? 'none'
+                    : `opacity ${DURATION}ms cubic-bezier(0.2, 0.8, 0.2, 1), transform ${DURATION}ms cubic-bezier(0.2, 0.8, 0.2, 1)`,
+                  willChange: 'opacity, transform',
                 },
               },
               items.map((item) => {
