@@ -179,11 +179,30 @@ export function createChannel(options) {
     }
 
     fs.mkdirSync(workspaceDirectory, { recursive: true })
-    const created = await sessionController.create({ cwd: workspaceDirectory })
+
+    // Prefer a real Workspace. A session created with only a `cwd` lands in the
+    // built-in "Ungrouped" bucket, which the desktop sidebar does not render —
+    // the session exists on disk and answers messages, yet is invisible in the
+    // app. Naming the workspace puts it in the sidebar where the user expects it.
+    let workspace
+    try {
+      workspace = options.resolveWorkspace ? await options.resolveWorkspace() : undefined
+    } catch {
+      workspace = undefined
+    }
+
+    const created = workspace
+      ? await sessionController.create({ workspaceId: workspace.id })
+      : await sessionController.create({ cwd: workspaceDirectory })
+
     updateState({
       bindings: {
         ...readState().bindings,
-        [key]: { sessionId: created.sessionId, cwd: workspaceDirectory, createdAt: Date.now() },
+        [key]: {
+          sessionId: created.sessionId,
+          cwd: workspace ? workspace.path : workspaceDirectory,
+          createdAt: Date.now(),
+        },
       },
     })
     return created.sessionId

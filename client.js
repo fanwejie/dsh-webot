@@ -38,6 +38,8 @@ window.__ModuleLoader__.load({
     const LOGIN_START_URL = '/api/webot/login/start'
     const LOGIN_VERIFY_URL = '/api/webot/login/verify'
     const LOGIN_CANCEL_URL = '/api/webot/login/cancel'
+    const SESSIONS_URL = '/api/webot/sessions'
+    const BIND_URL = '/api/webot/bind'
     const TITLE_ID = 'webot-panel-title'
 
     /* ------------------------------------------------------------------ *
@@ -393,6 +395,93 @@ window.__ModuleLoader__.load({
 
       const refreshStatus = () => setStatusTick((n) => n + 1)
 
+      /* --- session binding --- */
+      const [picker, setPicker] = React.useState(false)
+      const [sessions, setSessions] = React.useState({ phase: 'idle' })
+      const [bindError, setBindError] = React.useState('')
+
+      function loadSessions() {
+        setSessions({ phase: 'loading' })
+        fetch(SESSIONS_URL, { credentials: 'same-origin' })
+          .then((response) =>
+            response.ok ? response.json() : Promise.reject(new Error('HTTP ' + response.status)),
+          )
+          .then((json) => setSessions({ phase: 'ready', items: json.items || [] }))
+          .catch((error) => setSessions({ phase: 'error', reason: (error && error.message) || String(error) }))
+      }
+
+      function togglePicker() {
+        const next = !picker
+        setPicker(next)
+        if (next) loadSessions()
+      }
+
+      function bindTo(sessionId) {
+        setBindError('')
+        post(BIND_URL, { sessionId })
+          .then((body) => {
+            if (!body || body.ok !== true) {
+              setBindError((body && body.error) || t('bind.failed'))
+              return
+            }
+            setPicker(false)
+            refreshStatus()
+          })
+          .catch((error) => setBindError((error && error.message) || String(error)))
+      }
+
+      function renderPicker() {
+        if (sessions.phase === 'loading') return h('p', { style: MUTED }, t('bind.loading'))
+        if (sessions.phase === 'error') {
+          return h(
+            'div',
+            { style: { marginTop: '8px' } },
+            h('p', { style: { ...MUTED, color: 'var(--dsw-alias-state-error-primary)' } },
+              t('bind.error', { reason: sessions.reason })),
+            h(Btn, { label: t('bind.retry'), onClick: loadSessions }),
+          )
+        }
+        const items = sessions.items || []
+        return h(
+          'div',
+          { style: { marginTop: '8px', maxHeight: '220px', overflowY: 'auto' } },
+          h(Btn, { label: t('bind.detach'), onClick: () => bindTo('') }),
+          items.length === 0
+            ? h('p', { style: MUTED }, t('bind.empty'))
+            : items.map((item) =>
+                h(
+                  'button',
+                  {
+                    key: item.sessionId,
+                    type: 'button',
+                    onClick: () => bindTo(item.sessionId),
+                    style: {
+                      display: 'block',
+                      width: '100%',
+                      textAlign: 'left',
+                      marginTop: '4px',
+                      padding: '6px 8px',
+                      borderRadius: 'var(--dsw-radius-sm)',
+                      border: '0.5px solid var(--dsw-alias-border-l1)',
+                      background: 'var(--dsw-alias-bg-base)',
+                      color: 'var(--dsw-alias-label-primary)',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                      fontSize: '12px',
+                      lineHeight: '18px',
+                    },
+                  },
+                  h('span', null, item.title || t('bind.untitled')),
+                  h(
+                    'span',
+                    { style: { color: 'var(--dsw-alias-label-secondary)' } },
+                    ' · ' + item.shortId + (item.running ? ' · ' + t('bind.running') : ''),
+                  ),
+                ),
+              ),
+        )
+      }
+
       /* --- status unresolved --- */
       if (status.phase === 'loading') {
         return h('p', { style: MUTED }, t('status.loading'))
@@ -442,6 +531,38 @@ window.__ModuleLoader__.load({
               : null,
             status.data.diagnostics && status.data.diagnostics.statePath
               ? field(t('status.field.stateFile'), String(status.data.diagnostics.statePath))
+              : null,
+          ),
+          h(
+            'div',
+            {
+              style: {
+                marginTop: '16px',
+                paddingTop: '12px',
+                borderTop: '0.5px solid var(--dsw-alias-border-l1)',
+              },
+            },
+            h(
+              'div',
+              {
+                style: {
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                },
+              },
+              h('h3', { style: SECTION_TITLE }, t('bind.heading')),
+              h(Btn, { label: picker ? t('bind.close') : t('bind.change'), onClick: togglePicker }),
+            ),
+            h('p', { style: MUTED }, t('bind.hint')),
+            field(t('bind.current'), status.data.binding ? status.data.binding.shortId : t('bind.auto')),
+            status.data.binding && status.data.binding.cwd
+              ? field(t('bind.cwd'), String(status.data.binding.cwd))
+              : null,
+            picker ? renderPicker() : null,
+            bindError
+              ? h('p', { style: { ...MUTED, color: 'var(--dsw-alias-state-error-primary)' } }, bindError)
               : null,
           ),
           h('div', { style: { marginTop: '12px', display: 'flex', gap: '8px' } },
@@ -729,6 +850,21 @@ window.__ModuleLoader__.load({
       'account.sessions': '活动会话',
       'common.yes': '在线',
       'common.no': '离线',
+      'bind.heading': '会话绑定',
+      'bind.hint': '微信消息进这个 DSH 会话；在 DSH 里能看见它，也能接着在这边聊。',
+      'bind.current': '当前会话',
+      'bind.cwd': '会话目录',
+      'bind.auto': '自动新建',
+      'bind.change': '选择会话',
+      'bind.close': '收起',
+      'bind.loading': '正在读取会话…',
+      'bind.error': '读取会话失败：{reason}',
+      'bind.retry': '重试',
+      'bind.empty': '没有可选会话',
+      'bind.detach': '解除绑定（下条消息新建）',
+      'bind.failed': '绑定失败',
+      'bind.untitled': '未命名会话',
+      'bind.running': '运行中',
       'login.phase.idle': '准备中',
       'login.phase.starting': '正在获取二维码',
       'login.phase.waiting': '等待扫码',
@@ -753,7 +889,7 @@ window.__ModuleLoader__.load({
       'login.retry': '重试',
       'next.heading': '这一步做到了什么',
       'next.body':
-        'M3 打通了双向：后台为每个已绑定账号跑长轮询，微信消息落进这台电脑上的 DSH 会话，agent 的回答再送回微信。每个微信对话对应一个会话，目录固定在「会话目录」那一行。下一步（M4）才是 /new /list /switch 这些会话管理命令。',
+        'M4 加了会话绑定：新会话会建在名为 dsh_webot 的工作区里，所以能在 DSH 侧栏看到；也可以直接绑到任意一个已有会话上，两边接着聊。下一步是 /new /list /switch 这些在微信里切会话的命令。',
       'footer.hint': '按 Esc 关闭',
     }
 
@@ -781,6 +917,22 @@ window.__ModuleLoader__.load({
       'account.sessions': 'Live sessions',
       'common.yes': 'live',
       'common.no': 'off',
+      'bind.heading': 'Session binding',
+      'bind.hint':
+        'WeChat messages enter this DSH session, so it shows up in DSH and you can continue the conversation there.',
+      'bind.current': 'Bound session',
+      'bind.cwd': 'Directory',
+      'bind.auto': 'Create one automatically',
+      'bind.change': 'Choose a session',
+      'bind.close': 'Close list',
+      'bind.loading': 'Reading sessions…',
+      'bind.error': 'Could not read sessions: {reason}',
+      'bind.retry': 'Retry',
+      'bind.empty': 'No sessions available',
+      'bind.detach': 'Unbind (a new session starts on the next message)',
+      'bind.failed': 'Could not bind',
+      'bind.untitled': 'Untitled session',
+      'bind.running': 'running',
       'login.phase.idle': 'Preparing',
       'login.phase.starting': 'Fetching the QR code',
       'login.phase.waiting': 'Waiting for a scan',
@@ -805,7 +957,7 @@ window.__ModuleLoader__.load({
       'login.retry': 'Retry',
       'next.heading': 'What this milestone proves',
       'next.body':
-        'M3 closes the loop: a long poll runs per bound account, WeChat messages become DSH sessions on this machine, and the agent answer comes back as a WeChat reply. One session per WeChat conversation, with its directory shown above. Session commands (/new, /list, /switch) are M4.',
+        'M4 adds session binding: new sessions are created inside a workspace named dsh_webot, so they appear in the DSH sidebar, and you can bind the conversation to any existing session instead and continue it from both sides. Session commands from WeChat (/new, /list, /switch) come next.',
       'footer.hint': 'Press Esc to close',
     }
 

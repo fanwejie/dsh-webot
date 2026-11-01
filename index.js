@@ -31,7 +31,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.3.0'
+const VERSION = '0.4.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -51,6 +51,42 @@ let loginTask = null
 /** The live channel, set for the lifetime of the row. */
 let channel = null
 
+/** `accountId:userId` of the bound conversation — the key every binding uses. */
+function conversationKeyFor(state) {
+  const account = state.accounts[0]
+  return account ? `${account.accountId}:${account.userId}` : ''
+}
+
+/** The session this WeChat conversation currently talks to, if any. */
+function readBinding(state) {
+  const key = conversationKeyFor(state)
+  const entry = key ? state.bindings[key] : undefined
+  if (!entry) return null
+  return {
+    sessionId: entry.sessionId,
+    shortId: entry.sessionId.slice(-6),
+    cwd: entry.cwd,
+    createdAt: entry.createdAt,
+  }
+}
+
+/**
+ * Best-effort title for a session row.
+ *
+ * `SessionSummary` carries no title field; a title reaches the client through the
+ * session's projections, whose key set belongs to whichever package provides it.
+ * Several plausible names are tried instead of betting on one.
+ */
+function readTitle(item) {
+  const values = item && item.projections && item.projections.values
+  if (!values || typeof values !== 'object') return ''
+  for (const key of ['title', 'sessionTitle', 'name', 'label']) {
+    const value = values[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
 /** The status document the panel renders. Never includes a token. */
 function readStatus() {
   const state = readState()
@@ -63,7 +99,7 @@ function readStatus() {
     ok: true,
     plugin: 'dsh-webot',
     version: VERSION,
-    milestone: 'M3',
+    milestone: 'M4',
     bound,
     connected: bound && polling,
     polling,
@@ -81,6 +117,8 @@ function readStatus() {
       }
     }),
     errors: [...live.errors, ...(state.lastError ? [state.lastError.message] : [])],
+    conversationKey: conversationKeyFor(state),
+    binding: readBinding(state),
     diagnostics: {
       statePath: stateFilePath(),
       workspace: WORKSPACE_DIRECTORY,
@@ -137,8 +175,32 @@ export function apply(ctx) {
   const liveChannel = createChannel({
     sessionController: ctx.sessionController,
     workspaceDirectory: WORKSPACE_DIRECTORY,
+    resolveWorkspace: resolveWorkspace,
   })
   channel = liveChannel
+
+  /**
+   * The named Workspace the channel's sessions live in.
+   *
+   * Without one, a session created with a bare `cwd` falls into the built-in
+   * "Ungrouped" bucket, which the desktop sidebar does not render: the session
+   * exists, answers messages, and is invisible in the app. `workspaceRegistry`
+   * is read optionally so a composition without the Workspace feature still runs
+   * the channel, just without the sidebar entry.
+   */
+  async function resolveWorkspace() {
+    const registry = ctx.get('workspaceRegistry')
+    if (!registry) return undefined
+    const existing = await registry.resolveByPath(WORKSPACE_DIRECTORY)
+    if (existing) return { id: existing.id, path: existing.path }
+    const created = await registry.create(WORKSPACE_DIRECTORY)
+    return { id: created.id, path: created.path }
+  }
+
+  // Create the workspace eagerly rather than only on the first inbound message.
+  // If the sidebar groups sessions by `cwd`, this is also what makes a session
+  // created *before* this change show up, instead of only new ones.
+  void resolveWorkspace().catch(() => undefined)
 
   const getChannel = () => liveChannel
 
@@ -220,6 +282,65 @@ export function apply(ctx) {
       if (loginTask) loginTask.cancel()
       loginTask = null
       return json({ ok: true })
+    } catch (error) {
+      return failure(error)
+    }
+  })
+
+  register('/api/webot/sessions', ['GET'], async () => {
+    try {
+      const value = await ctx.sessionController.list({}, AbortSignal.timeout(8000))
+      const items = Array.isArray(value && value.items) ? value.items : []
+      return json({
+        ok: true,
+        current: readBinding(readState()),
+        items: items.slice(0, 40).map((item) => ({
+          sessionId: item.sessionId,
+          shortId: String(item.sessionId).slice(-6),
+          title: readTitle(item),
+          cwd: item.cwd || '',
+          updatedAt: item.updatedAt || 0,
+          running: Boolean(item.running),
+          blank: Boolean(item.blank),
+        })),
+      })
+    } catch (error) {
+      return failure(error)
+    }
+  })
+
+  register('/api/webot/bind', ['POST'], async (request) => {
+    try {
+      const payload = await request.json().catch(() => ({}))
+      const state = readState()
+      const key = conversationKeyFor(state)
+      if (!key) return json({ ok: false, error: '还没有绑定微信' }, 409)
+
+      const bindings = { ...state.bindings }
+      const requested = typeof payload?.sessionId === 'string' ? payload.sessionId.trim() : ''
+
+      // No session id means "detach": the next inbound message creates a fresh
+      // session inside the named workspace.
+      if (!requested) {
+        delete bindings[key]
+        updateState({ bindings })
+        return json({ ok: true, binding: null })
+      }
+
+      const value = await ctx.sessionController.list({}, AbortSignal.timeout(8000))
+      const items = Array.isArray(value && value.items) ? value.items : []
+      const found = items.find((item) => item.sessionId === requested)
+      if (!found) return json({ ok: false, error: '找不到该会话，请刷新列表后重试' }, 404)
+
+      // The Host adopts an existing session by `cwd`; store the one it reports
+      // rather than assuming it, or the session becomes unreachable later.
+      bindings[key] = {
+        sessionId: requested,
+        cwd: found.cwd || WORKSPACE_DIRECTORY,
+        createdAt: Date.now(),
+      }
+      updateState({ bindings })
+      return json({ ok: true, binding: readBinding(readState()) })
     } catch (error) {
       return failure(error)
     }

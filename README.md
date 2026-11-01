@@ -47,6 +47,21 @@ It must never vary per conversation: the Host matches an adopted session by
 `cwd`, and a mismatch makes that session permanently unreachable.
 
 
+## Seeing the session in DSH
+
+A session created with only a `cwd` lands in the built-in "Ungrouped" bucket,
+and the desktop sidebar does not render that bucket — the session exists on
+disk, answers WeChat messages, and is invisible in the app. That was the state
+after M3, confirmed by a session directory on disk with no sidebar row.
+
+M4 fixes it in two ways:
+
+- channel-created sessions are created inside a **named workspace** at
+  `$DSH_HOME/dsh_webot`, so they appear in the sidebar like any other;
+- the panel's 「会话绑定」 section lists the Host's sessions and binds the
+  conversation to any of them — including one you already had — or detaches it,
+  so the next message starts a fresh session inside the workspace.
+
 ## Layout
 
 | File | Role |
