@@ -24,6 +24,7 @@ import path from 'node:path'
 
 import { MESSAGE_TYPE_USER, getUpdates, sendText } from './protocol/messages.js'
 import { downloadMedia, extensionForName } from './protocol/media.js'
+import { sendMediaToWeChat } from './protocol/outbound-media.js'
 import { appendEventLog, readState, updateState } from './state.js'
 
 /** Longest slice of one answer sent as a single WeChat message. */
@@ -413,6 +414,36 @@ export function createChannel(options) {
     const relative = path.relative(cwd, target).split(path.sep).join('/')
     note('media', `${label} | ${buffer.length} bytes | ${relative}`)
     return `[微信${label}] 已保存到 ${relative}（${buffer.length} 字节）`
+  }
+
+  /**
+   * Send a local file to the conversation that owns `sessionId`.
+   *
+   * Relative paths resolve against the session's workspace, not the process
+   * directory: the agent produced the file while working in `cwd`, and that is
+   * what a relative path means to it.
+   */
+  async function sendFileToConversation(sessionId, filePath, caption) {
+    const target = targetForSession(sessionId)
+    if (!target) throw new Error('这个会话没有绑定微信对话，文件发不出去')
+
+    const account = readState().accounts.find((entry) => entry.accountId === target.accountId)
+    if (!account) throw new Error('找不到可用的微信账号')
+
+    const binding = readState().bindings[`${target.accountId}:${target.toUserId}`]
+    const base = (binding && binding.cwd) || workspaceDirectory
+    const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(base, filePath)
+
+    const result = await sendMediaToWeChat({
+      baseUrl: account.baseUrl,
+      token: account.token,
+      toUserId: target.toUserId,
+      contextToken: target.contextToken,
+      filePath: resolved,
+      caption: caption || '',
+    })
+    note('send-media', `${result.kind} | ${result.fileName} | ${result.bytes} bytes`)
+    return { sent: true, kind: result.kind, fileName: result.fileName, bytes: result.bytes }
   }
 
   async function handleInbound(account, message, signal) {
@@ -898,6 +929,7 @@ export function createChannel(options) {
   return {
     handleAssistantStream,
     handleApproval,
+    sendFileToConversation,
     startAccount,
     startAll,
     stopAccount,

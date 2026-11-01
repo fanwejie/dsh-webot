@@ -169,8 +169,28 @@ directly yields a 32-byte key for the first shape — garbage rather than an err
 Voice notes use the service's own transcription when the item carries one, so
 voice works without a codec (word-level fidelity is whatever Tencent provides).
 
-Not built yet: outbound media — the agent sending a file back. That needs the CDN
-upload path and a tool to invoke it.
+### Outbound
+
+The agent can send a file back with the `send_to_wechat` tool:
+
+```json
+{ "path": "report.pdf", "caption": "做好了" }
+```
+
+Relative paths resolve against the session's workspace (its `cwd`), which is where
+the agent wrote them. Images, videos and ordinary files are dispatched by
+extension. Three details decide whether the phone shows a picture or a grey box:
+
+- the download reference is the **`x-encrypted-param` response header** of the
+  upload POST — `upload_full_url` from `getuploadurl` is upload authorization, and
+  putting it in the item gets a 403 on read;
+- `media.aes_key` is base64 of the **hex text** of the key, not base64 of the raw
+  bytes; the wrong shape is accepted by the server and renders broken;
+- each item carries only its own fields (`image` gets `mid_size`, `file` gets
+  `file_name` + `len`, `video` gets `video_size`) — extra fields corrupt the frame.
+
+Uploads retry three times on 5xx and abort immediately on 4xx, because a refusal
+is not a flake.
 
 ## Layout
 

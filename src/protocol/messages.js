@@ -36,6 +36,11 @@ function baseInfo() {
   return { channel_version: CHANNEL_VERSION, bot_agent: `weBot/${CHANNEL_VERSION}` }
 }
 
+/** The `base_info` every CGI request carries; exported for the upload path. */
+export function requestBaseInfo() {
+  return baseInfo()
+}
+
 function newClientId() {
   return `webot-${crypto.randomUUID()}`
 }
@@ -64,15 +69,15 @@ export async function getUpdates({ baseUrl, token, syncBuffer, timeoutMs = 35_00
   return JSON.parse(raw)
 }
 
-/** Send one plain-text message to `toUserId`, echoing the conversation's context token. */
-export async function sendText({ baseUrl, token, toUserId, text, contextToken, signal }) {
+/** Send one `MessageItem` and echo the conversation's context token. */
+export async function sendItem({ baseUrl, token, toUserId, item, contextToken, signal }) {
   const msg = {
     from_user_id: '',
     to_user_id: toUserId,
     client_id: newClientId(),
     message_type: MESSAGE_TYPE_BOT,
     message_state: MESSAGE_STATE_FINISH,
-    item_list: [{ type: MESSAGE_ITEM_TEXT, text_item: { text } }],
+    item_list: [item],
   }
   if (contextToken) msg.context_token = contextToken
 
@@ -90,4 +95,16 @@ export async function sendText({ baseUrl, token, toUserId, text, contextToken, s
     throw new Error(`sendmessage ret=${parsed.ret} errmsg=${parsed.errmsg || '(none)'}`)
   }
   return parsed
+}
+
+/** Send one plain-text message to `toUserId`, echoing the conversation's context token. */
+export async function sendText({ baseUrl, token, toUserId, text, contextToken, signal }) {
+  return sendItem({
+    baseUrl,
+    token,
+    toUserId,
+    item: { type: MESSAGE_ITEM_TEXT, text_item: { text } },
+    contextToken,
+    signal,
+  })
 }

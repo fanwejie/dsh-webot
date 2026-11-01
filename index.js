@@ -31,7 +31,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.7.0'
+const VERSION = '0.8.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -240,6 +240,63 @@ export function apply(ctx) {
     } catch (error) {
       liveChannel.log('boot', `approval listener failed: ${String((error && error.message) || error)}`)
     }
+  }
+
+  // The one tool this plugin adds: hand the phone a file the agent produced.
+  // Read optionally so a composition without the tool registry still runs the
+  // channel; the agent simply cannot send media back there.
+  const tools = ctx.get('tools')
+  if (tools && typeof tools.register === 'function') {
+    ctx.effect(
+      () =>
+        tools.register({
+          name: 'send_to_wechat',
+          description:
+            '把一个本地文件发到当前会话绑定的微信对话里。图片（jpg/png/gif/webp）、视频（mp4/mov）和普通文件都支持。只在微信会话里可用。',
+          parameters: {
+            type: 'object',
+            properties: {
+              path: {
+                type: 'string',
+                description: '要发送的文件路径；相对路径按当前会话的工作目录解析',
+              },
+              caption: { type: 'string', description: '可选，随文件一起发的一句说明' },
+            },
+            required: ['path'],
+            additionalProperties: false,
+          },
+          output: {
+            schema: {
+              type: 'object',
+              properties: {
+                sent: { type: 'boolean' },
+                kind: { type: 'string' },
+                fileName: { type: 'string' },
+                bytes: { type: 'number' },
+              },
+              required: ['sent'],
+              additionalProperties: false,
+            },
+            render: (_args, value) => [{ type: 'text', text: JSON.stringify(value) }],
+          },
+          execute: async (args, exec) => {
+            const sessionId =
+              exec && exec.agent && exec.agent.id ? String(exec.agent.id) : ''
+            if (!sessionId) throw new Error('拿不到当前会话，无法确定发往哪个微信对话')
+            return liveChannel.sendFileToConversation(
+              sessionId,
+              String((args && args.path) || ''),
+              args && args.caption ? String(args.caption) : '',
+            )
+          },
+        }),
+      'dsh-webot: send_to_wechat tool',
+    )
+    liveChannel.log('boot', 'send_to_wechat tool registered')
+  } else {
+    // Silent absence is the worst outcome: the agent would simply never have the
+    // tool and nothing would say why.
+    liveChannel.log('boot', 'tool registry unavailable - send_to_wechat disabled')
   }
 
   ctx.effect(() => {
