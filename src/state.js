@@ -120,6 +120,20 @@ export function normalizeState(raw) {
     }
   }
 
+  // Last context token per conversation.
+  //
+  // The gateway issues one with every inbound message and expects it echoed on the
+  // reply. Keeping the newest one on disk is what makes an outbound send possible
+  // from a session that never received a message — the desktop case — and after a
+  // restart, when the in-memory copy is gone.
+  const contextTokens = {}
+  if (source.contextTokens && typeof source.contextTokens === 'object') {
+    for (const [key, value] of Object.entries(source.contextTokens)) {
+      if (!key || typeof value !== 'string' || !value || value.length > 4096) continue
+      contextTokens[text(key, 256)] = value
+    }
+  }
+
   // WeChat conversation -> DSH session, keyed by `${accountId}:${userId}`.
   const bindings = {}
   if (source.bindings && typeof source.bindings === 'object') {
@@ -140,6 +154,7 @@ export function normalizeState(raw) {
     accounts,
     syncBufs,
     bindings,
+    contextTokens,
     // Where a permission prompt is offered. `phone` claims the request and the
     // desk never sees it; `desktop` delegates and the channel stays out. Anything
     // else — a first run, or a stored 'both' from the withdrawn race mode — is

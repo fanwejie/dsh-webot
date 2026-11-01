@@ -611,9 +611,14 @@ export function createChannel(options) {
     if (!account) return undefined
     const key = `${account.accountId}:${account.userId}`
     if (!state.bindings[key]) return undefined
-    // No context token without an inbound message. The gateway accepts a send
-    // without one; it only loses the reply-context link.
-    return { accountId: account.accountId, toUserId: account.userId, contextToken: '' }
+    // The stored token is the whole point: a send from a desk session has never
+    // seen an inbound message, and without a token the gateway answers
+    // `ret=-2 prepare failed` instead of delivering.
+    return {
+      accountId: account.accountId,
+      toUserId: account.userId,
+      contextToken: state.contextTokens[key] || '',
+    }
   }
 
   /** A session's `cwd`, for resolving a relative path the way that session means it. */
@@ -653,17 +658,31 @@ export function createChannel(options) {
     const base = (direct ? '' : await workingDirectoryOf(sessionId)) || conversationCwd || workspaceDirectory
     const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(base, filePath)
 
-    const result = await sendMediaToWeChat({
-      baseUrl: account.baseUrl,
-      token: account.token,
-      toUserId: target.toUserId,
-      contextToken: target.contextToken,
-      filePath: resolved,
-      caption: caption || '',
-    })
+    // Logged before the attempt, not only on success: the failure path used to be
+    // silent, which made "发不出去" impossible to diagnose from the log.
     note(
       'send-media',
-      `${result.kind} | ${result.fileName} | ${result.bytes} bytes${direct ? '' : ' | cross-session'}`,
+      `target=${target.accountId}${direct ? '' : ' cross-session'} token=${target.contextToken ? 'yes' : 'none'} path=${resolved}`,
+    )
+
+    let result
+    try {
+      result = await sendMediaToWeChat({
+        baseUrl: account.baseUrl,
+        token: account.token,
+        toUserId: target.toUserId,
+        contextToken: target.contextToken,
+        filePath: resolved,
+        caption: caption || '',
+      })
+    } catch (error) {
+      note('send-media', `failed | ${String((error && error.message) || error)}`)
+      throw error
+    }
+
+    note(
+      'send-media',
+      `sent ${result.kind} | ${result.fileName} | ${result.bytes} bytes${direct ? '' : ' | cross-session'}`,
     )
     return { sent: true, kind: result.kind, fileName: result.fileName, bytes: result.bytes }
   }
@@ -685,6 +704,20 @@ export function createChannel(options) {
     const messageId = String(message.message_id || '')
     if (remember(messageId)) return
     note('inbound', `${userId} · ${text.length} chars · ${mediaItems.length} media`)
+
+    // Every inbound message carries a fresh context token. Keeping the newest one
+    // on disk is what makes an outbound send possible from a session that never
+    // received a message, and after a restart drops the in-memory copy.
+    const conversationKey = `${account.accountId}:${userId}`
+    const incomingToken = String(message.context_token || '')
+    if (incomingToken) {
+      const state = readState()
+      if (state.contextTokens[conversationKey] !== incomingToken) {
+        updateState({
+          contextTokens: { ...state.contextTokens, [conversationKey]: incomingToken },
+        })
+      }
+    }
 
     // A reply to a permission prompt is consumed here. The agent turn is blocked
     // waiting for exactly this decision, so forwarding the text would queue it
@@ -903,7 +936,11 @@ export function createChannel(options) {
     const key = `${account.accountId}:${account.userId}`
     const binding = state.bindings[key]
     if (binding && binding.sessionId === sessionId) {
-      return { accountId: account.accountId, toUserId: account.userId, contextToken: '' }
+      return {
+        accountId: account.accountId,
+        toUserId: account.userId,
+        contextToken: state.contextTokens[key] || '',
+      }
     }
     return undefined
   }

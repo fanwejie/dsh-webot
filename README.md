@@ -378,6 +378,25 @@ Relative paths resolve against the calling session's `cwd` (what the path means 
 the agent that produced it), and against the conversation workspace only when the
 session cannot be looked up.
 
+**The context token is what makes it actually deliver.** The gateway issues a token
+with every inbound message and expects it echoed on the reply; a send from a desk
+session has never seen one. Without a token the gateway answers
+`ret=-2 prepare failed` rather than delivering, so the newest token per conversation
+is persisted in `state.json` (`contextTokens`) and used by both send paths. A
+`ret=-2` on a token-bearing send is retried once **without** the token, because a
+proactive message carrying none is accepted — that is the stale-token case.
+
+The send path logs before it attempts, not only on success:
+
+```
+send-media target=…@im.bot cross-session token=yes path=…
+send-media failed | <reason>
+send-media sent image | shot.png | 118473 bytes | cross-session
+```
+
+Without that first line a failed send left no trace at all, which is exactly why
+"发不出去" could not be diagnosed from the log.
+
 Package name, patch row id and the `client.js` module id must stay equal
 (`dsh-webot`); the plugin manager and the client module loader both key on it.
 

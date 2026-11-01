@@ -71,30 +71,45 @@ export async function getUpdates({ baseUrl, token, syncBuffer, timeoutMs = 35_00
 
 /** Send one `MessageItem` and echo the conversation's context token. */
 export async function sendItem({ baseUrl, token, toUserId, item, contextToken, signal }) {
-  const msg = {
-    from_user_id: '',
-    to_user_id: toUserId,
-    client_id: newClientId(),
-    message_type: MESSAGE_TYPE_BOT,
-    message_state: MESSAGE_STATE_FINISH,
-    item_list: [item],
-  }
-  if (contextToken) msg.context_token = contextToken
+  const submit = async (withContext) => {
+    const msg = {
+      from_user_id: '',
+      to_user_id: toUserId,
+      client_id: newClientId(),
+      message_type: MESSAGE_TYPE_BOT,
+      message_state: MESSAGE_STATE_FINISH,
+      item_list: [item],
+    }
+    if (withContext && contextToken) msg.context_token = contextToken
 
-  const raw = await ilinkPost({
-    baseUrl,
-    endpoint: 'ilink/bot/sendmessage',
-    payload: { msg, base_info: baseInfo() },
-    token,
-    timeoutMs: 20_000,
-    signal,
-    label: 'sendmessage',
-  })
-  const parsed = JSON.parse(raw)
-  if (parsed.ret && parsed.ret !== 0) {
-    throw new Error(`sendmessage ret=${parsed.ret} errmsg=${parsed.errmsg || '(none)'}`)
+    const raw = await ilinkPost({
+      baseUrl,
+      endpoint: 'ilink/bot/sendmessage',
+      payload: { msg, base_info: baseInfo() },
+      token,
+      timeoutMs: 20_000,
+      signal,
+      label: 'sendmessage',
+    })
+    const parsed = JSON.parse(raw)
+    if (parsed.ret && parsed.ret !== 0) {
+      throw new Error(`sendmessage ret=${parsed.ret} errmsg=${parsed.errmsg || '(none)'}`)
+    }
+    return parsed
   }
-  return parsed
+
+  try {
+    return await submit(true)
+  } catch (error) {
+    // `ret=-2 prepare failed` is what a token the gateway will not accept looks
+    // like — a stale one, or one whose conversation has moved on. A proactive
+    // message with no token at all is accepted, so retry once bare rather than
+    // losing the message over the token.
+    if (contextToken && /ret=-2\b/.test(String((error && error.message) || ''))) {
+      return submit(false)
+    }
+    throw error
+  }
 }
 
 /** Send one plain-text message to `toUserId`, echoing the conversation's context token. */
