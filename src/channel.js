@@ -22,7 +22,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 
 import { MESSAGE_TYPE_USER, getUpdates, sendText } from './protocol/messages.js'
-import { readState, updateState } from './state.js'
+import { appendEventLog, readState, updateState } from './state.js'
 
 /** Longest slice of one answer sent as a single WeChat message. */
 const MAX_REPLY_CHARS = 1200
@@ -208,8 +208,10 @@ export function createChannel(options) {
   const events = []
 
   function note(kind, detail) {
-    events.push({ at: Date.now(), kind, detail: String(detail === undefined ? '' : detail).slice(0, 300) })
+    const text = String(detail === undefined ? '' : detail).slice(0, 300)
+    events.push({ at: Date.now(), kind, detail: text })
     if (events.length > 80) events.shift()
+    appendEventLog(kind, text)
   }
 
   function recordError(accountId, error) {
@@ -440,23 +442,43 @@ export function createChannel(options) {
    * `next()` is the default for anything this channel does not own. A session the
    * user is driving at the desk must keep its desktop prompt: silently answering
    * it from a phone nobody is looking at would be worse than making the desk wait.
+   *
+   * Wrapped so a throw here cannot surface as an unhandled rejection inside the
+   * waterfall, which would leave the agent waiting with no prompt anywhere.
    */
   async function handleApproval(request, next) {
+    try {
+      return await claimApproval(request, next)
+    } catch (error) {
+      note('approval', `error | ${String((error && error.message) || error)}`)
+      return next()
+    }
+  }
+
+  async function claimApproval(request, next) {
     const sessionId = request && request.agent && request.agent.id ? String(request.agent.id) : ''
+    const toolName = String((request && request.toolName) || 'tool')
+    // Logged before any decision: "the prompt never reached WeChat" and "the
+    // prompt never reached this listener" look identical from the phone.
+    note('approval', `seen ${toolName} | ${sessionId || 'no-session'}`)
     if (!sessionId) return next()
 
     const target = targetForSession(sessionId)
-    if (!target) return next()
+    if (!target) {
+      note('approval', `delegated | no target for ${sessionId.slice(-8)}`)
+      return next()
+    }
 
     const key = `${target.accountId}:${target.toUserId}`
-    if (pendingApprovals.has(key)) return next()
+    if (pendingApprovals.has(key)) {
+      note('approval', 'delegated | another prompt is already open')
+      return next()
+    }
 
-    const toolName = String(request.toolName || 'tool')
     const reason =
       (request.displayReason && (request.displayReason.zh || request.displayReason.en)) ||
       request.reason ||
       ''
-    note('approval', `${toolName} · ${shortId(sessionId)}`)
 
     const lines = [`agent 需要你的许可（会话 ${shortId(sessionId)}）`, `工具：${toolName}`]
     if (reason) lines.push(`原因：${String(reason).slice(0, 300)}`)
@@ -732,5 +754,6 @@ export function createChannel(options) {
     stopAccount,
     stopAll,
     snapshot,
+    log: note,
   }
 }

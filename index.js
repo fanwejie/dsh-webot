@@ -223,11 +223,21 @@ export function apply(ctx) {
   // Permission prompts are a waterfall: returning an outcome claims the request,
   // calling `next()` leaves it to the other answerers (the desktop pane). The
   // channel only claims prompts for sessions it owns.
+  //
+  // `prepend: true` is the load-bearing part. The desktop answerer is registered
+  // before this row, and a waterfall stops at whoever claims the request; without
+  // prepending, the prompt is answered at the desk and never reaches the phone.
   const onApproval = (request, next) => liveChannel.handleApproval(request, next)
   try {
-    ctx.on('approval/request', onApproval, { global: true })
+    ctx.on('approval/request', onApproval, { global: true, prepend: true })
+    liveChannel.log('boot', 'approval listener: global+prepend')
   } catch {
-    ctx.on('approval/request', onApproval)
+    try {
+      ctx.on('approval/request', onApproval)
+      liveChannel.log('boot', 'approval listener: local only - options rejected')
+    } catch (error) {
+      liveChannel.log('boot', `approval listener failed: ${String((error && error.message) || error)}`)
+    }
   }
 
   ctx.effect(() => {

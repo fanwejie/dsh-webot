@@ -129,6 +129,40 @@ export function readState() {
   }
 }
 
+/** Absolute path of the channel's append-only event log. */
+export function eventLogPath() {
+  return path.join(stateDirectory(), 'events.log')
+}
+
+/** Size past which the log is started over instead of growing without bound. */
+const EVENT_LOG_LIMIT = 512 * 1024
+
+/**
+ * Append one diagnostic line.
+ *
+ * The in-memory ring in `/status` is only readable by an authenticated page, and
+ * the failures worth diagnosing here (a listener that never fires, a session id
+ * that does not match) happen when nobody is looking at that page. A file on disk
+ * is the difference between reporting a cause and guessing at one.
+ *
+ * Best effort: a failed write must never break message handling.
+ */
+export function appendEventLog(kind, detail) {
+  try {
+    const file = eventLogPath()
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 })
+    try {
+      if (fs.statSync(file).size > EVENT_LOG_LIMIT) fs.writeFileSync(file, '')
+    } catch {
+      /* absent file is the normal first case */
+    }
+    const stamp = new Date().toISOString()
+    fs.appendFileSync(file, `${stamp} ${kind} ${String(detail === undefined ? '' : detail).slice(0, 500)}\n`)
+  } catch {
+    /* diagnostics must never be a failure source */
+  }
+}
+
 /** Merge a patch into the stored state, normalize, and write it atomically. */
 export function updateState(patch) {
   const current = readState()
