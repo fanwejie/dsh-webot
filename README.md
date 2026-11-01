@@ -87,6 +87,32 @@ The command name runs up to the first non-letter, so `/switch3` is accepted as
 `/switch 3`; `/switch:3` is not, because the colon lands in the argument and is
 then treated as a short id.
 
+## Permission prompts on the phone
+
+`approval/request` is a waterfall: return an outcome to claim the request, call
+`next()` to leave it to the other answerers. The channel claims a prompt only
+when the requesting session is one it owns; everything else delegates, so a
+session you are driving at the desk keeps its desktop prompt rather than being
+silently answered by a phone nobody is looking at.
+
+While a prompt is open the agent turn is blocked on it, so the phone reply is
+consumed before commands and before the agent:
+
+| Reply | Outcome |
+| --- | --- |
+| `1`, `允许`, `同意`, `好`, `y`, `yes` | `allowed-once` |
+| `2`, `拒绝`, `不`, `n`, `no` | `rejected` |
+| `3`, `取消` | `cancelled` |
+
+Anything else while a prompt is open gets a short reminder instead of being
+forwarded — the turn is waiting on the decision, so queueing text behind it
+would only look like the agent ignored you. `req.signal` aborts the wait (the
+request went away), and unloading the plugin resolves every open prompt as
+`cancelled` so no turn stays blocked for the life of the process.
+
+One prompt per conversation: a second simultaneous request delegates instead of
+stacking, which is what keeps a bare `1` unambiguous.
+
 ## Layout
 
 | File | Role |

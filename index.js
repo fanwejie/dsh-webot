@@ -31,7 +31,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.5.0'
+const VERSION = '0.6.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -99,7 +99,7 @@ function readStatus() {
     ok: true,
     plugin: 'dsh-webot',
     version: VERSION,
-    milestone: 'M5',
+    milestone: 'M6',
     bound,
     connected: bound && polling,
     polling,
@@ -123,6 +123,7 @@ function readStatus() {
       statePath: stateFilePath(),
       workspace: WORKSPACE_DIRECTORY,
       sessions: live.activeSessions,
+      pendingApprovals: live.pendingApprovals || 0,
       events: live.events || [],
     },
     checkedAt: new Date().toISOString(),
@@ -217,6 +218,16 @@ export function apply(ctx) {
     ctx.on('agent/assistant-stream', onStream, { global: true })
   } catch {
     ctx.on('agent/assistant-stream', onStream)
+  }
+
+  // Permission prompts are a waterfall: returning an outcome claims the request,
+  // calling `next()` leaves it to the other answerers (the desktop pane). The
+  // channel only claims prompts for sessions it owns.
+  const onApproval = (request, next) => liveChannel.handleApproval(request, next)
+  try {
+    ctx.on('approval/request', onApproval, { global: true })
+  } catch {
+    ctx.on('approval/request', onApproval)
   }
 
   ctx.effect(() => {

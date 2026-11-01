@@ -100,6 +100,33 @@ function readTitle(item) {
 }
 
 /**
+ * What a reply to a permission prompt means.
+ *
+ * Numbers first because a phone is a bad keyboard, words second because `1` on
+ * a keyboard is fine but `1` as a *message* invites typos.
+ */
+const APPROVAL_ANSWERS = new Map([
+  ['1', 'allowed-once'],
+  ['允许', 'allowed-once'],
+  ['同意', 'allowed-once'],
+  ['好', 'allowed-once'],
+  ['y', 'allowed-once'],
+  ['yes', 'allowed-once'],
+  ['2', 'rejected'],
+  ['拒绝', 'rejected'],
+  ['不', 'rejected'],
+  ['n', 'rejected'],
+  ['no', 'rejected'],
+  ['3', 'cancelled'],
+  ['取消', 'cancelled'],
+])
+
+/** Map one phone reply to an approval outcome, or '' when it is not an answer. */
+function parseApprovalAnswer(text) {
+  return APPROVAL_ANSWERS.get(String(text || '').trim().toLowerCase()) || ''
+}
+
+/**
  * Split `/name rest` into a command. Returns null for anything that is not one,
  * so ordinary text that happens to start with a slash still reaches the agent.
  */
@@ -161,6 +188,14 @@ export function createChannel(options) {
    * after a restart the user re-runs `/list`.
    */
   const lastList = new Map()
+  /**
+   * conversationKey -> the one pending permission decision.
+   *
+   * The agent turn is blocked while this exists, so at most one per conversation:
+   * a second request delegates instead of stacking, which is what keeps a bare
+   * "1" unambiguous.
+   */
+  const pendingApprovals = new Map()
 
   /**
    * Ring buffer of what this channel actually did.
@@ -307,6 +342,26 @@ export function createChannel(options) {
     if (remember(messageId)) return
     note('inbound', `${userId} · ${text.length} chars`)
 
+    // A reply to a permission prompt is consumed here. The agent turn is blocked
+    // waiting for exactly this decision, so forwarding the text would queue it
+    // behind the very answer it is supposed to supply.
+    const pendingApproval = pendingApprovals.get(`${account.accountId}:${userId}`)
+    if (pendingApproval) {
+      const outcome = parseApprovalAnswer(text)
+      if (outcome) {
+        pendingApproval.finish(outcome)
+        note('approval-reply', outcome)
+        return
+      }
+      await sendReply(
+        account.accountId,
+        userId,
+        String(message.context_token || ''),
+        '先回答上面的权限请求：1 允许 · 2 拒绝 · 3 取消',
+      )
+      return
+    }
+
     // A known command is answered by the channel itself and never reaches the
     // agent. Unknown slash text falls through, so ordinary prose that starts
     // with a slash still works.
@@ -344,6 +399,74 @@ export function createChannel(options) {
     )
     note('prompt', 'accepted')
     clearError(account.accountId)
+  }
+
+  /** Where a given session's answers go, when this channel owns that session. */
+  function targetForSession(sessionId) {
+    const direct = replyTargets.get(sessionId)
+    if (direct) return direct
+    const state = readState()
+    const account = state.accounts[0]
+    if (!account) return undefined
+    const key = `${account.accountId}:${account.userId}`
+    const binding = state.bindings[key]
+    if (binding && binding.sessionId === sessionId) {
+      return { accountId: account.accountId, toUserId: account.userId, contextToken: '' }
+    }
+    return undefined
+  }
+
+  /** Resolve when the phone answers, or when the request is cancelled. */
+  function waitForApproval(key, signal) {
+    return new Promise((resolve) => {
+      const entry = {}
+      const onAbort = () => entry.finish('cancelled')
+      entry.finish = (outcome) => {
+        if (pendingApprovals.get(key) === entry) pendingApprovals.delete(key)
+        if (signal) signal.removeEventListener('abort', onAbort)
+        resolve(outcome)
+      }
+      pendingApprovals.set(key, entry)
+      if (signal) {
+        if (signal.aborted) entry.finish('cancelled')
+        else signal.addEventListener('abort', onAbort, { once: true })
+      }
+    })
+  }
+
+  /**
+   * Claim one permission request for the phone, or delegate.
+   *
+   * `next()` is the default for anything this channel does not own. A session the
+   * user is driving at the desk must keep its desktop prompt: silently answering
+   * it from a phone nobody is looking at would be worse than making the desk wait.
+   */
+  async function handleApproval(request, next) {
+    const sessionId = request && request.agent && request.agent.id ? String(request.agent.id) : ''
+    if (!sessionId) return next()
+
+    const target = targetForSession(sessionId)
+    if (!target) return next()
+
+    const key = `${target.accountId}:${target.toUserId}`
+    if (pendingApprovals.has(key)) return next()
+
+    const toolName = String(request.toolName || 'tool')
+    const reason =
+      (request.displayReason && (request.displayReason.zh || request.displayReason.en)) ||
+      request.reason ||
+      ''
+    note('approval', `${toolName} · ${shortId(sessionId)}`)
+
+    const lines = [`agent 需要你的许可（会话 ${shortId(sessionId)}）`, `工具：${toolName}`]
+    if (reason) lines.push(`原因：${String(reason).slice(0, 300)}`)
+    lines.push('', '回复 1 允许一次 · 2 拒绝 · 3 取消')
+
+    await sendReply(target.accountId, target.toUserId, target.contextToken, lines.join('\n'))
+
+    const outcome = await waitForApproval(key, request.signal)
+    note('approval', `answered ${outcome}`)
+    return outcome
   }
 
   async function listSessions() {
@@ -580,6 +703,10 @@ export function createChannel(options) {
     for (const accountId of [...loops.keys()]) stopAccount(accountId)
     for (const timer of settleTimers.values()) clearTimeout(timer)
     settleTimers.clear()
+    // An unanswered permission request would otherwise leave the agent turn
+    // blocked for the rest of the process's life.
+    for (const entry of [...pendingApprovals.values()]) entry.finish('cancelled')
+    pendingApprovals.clear()
   }
 
   function snapshot() {
@@ -592,9 +719,18 @@ export function createChannel(options) {
       })),
       errors: [...accountErrors.values()],
       activeSessions: replyTargets.size,
+      pendingApprovals: pendingApprovals.size,
       events: events.slice(-24),
     }
   }
 
-  return { handleAssistantStream, startAccount, startAll, stopAccount, stopAll, snapshot }
+  return {
+    handleAssistantStream,
+    handleApproval,
+    startAccount,
+    startAll,
+    stopAccount,
+    stopAll,
+    snapshot,
+  }
 }
