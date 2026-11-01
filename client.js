@@ -1420,12 +1420,14 @@ window.__ModuleLoader__.load({
       'promptRefresh.label': '提示词重发',
       'promptRefresh.unit': '轮完整发一次',
       'done.label': '任务完成提醒',
-      'done.unit': '打开后：别的会话跑完，且你',
+      'done.unit': '打开后：别的会话跑完，你',
       'done.delay': '等待秒数',
-      'done.delayUnit': '秒内没动鼠标/键盘，就发微信告诉你',
+      'done.delayUnit': '秒内鼠标移动不到 4 个光标距离，就发微信告诉你',
       'done.hint':
-        '只提醒别的会话（微信自己的会话不提醒，它本来就会回你）。判定方式：任务结束后盯这么久，这期间你碰了鼠标或键盘，就当你在电脑前，不打扰你；一直没动，就发一条"[系统提示] 工作区 · 会话 · DSH 已跑完"到微信。这条消息由通道直接发出，不经过 AI。'
-        + '需要读 Windows 的"最后输入时间"，所以每次判定会起一个 PowerShell 进程（约 0.3 秒）。',
+        '只提醒别的会话（微信自己的会话不提醒，它本来就会回你）。'
+        + '判定方式：任务结束后连续采样鼠标位置这么久，累计移动不到 120px（约 4 个光标距离）就当人不在，发一条"[系统提示] 工作区 · 会话 · DSH 已跑完"到微信；移动超过这个距离、或期间一直在敲键盘，就认为你在电脑前，不打扰你。'
+        + '桌子震动、手碰一下鼠标不会取消提醒——这正是设阈值的意义。'
+        + '需要读 Windows 的鼠标位置，所以每次判定会起一个 PowerShell 进程，跑满整个窗口。',
       'promptRefresh.hint': '完整提示词不再每条都发；平时只带一句"必须调工具"的提醒。改提示词后会自动重发一次。',
       'persona.heading': '提示词',
       'persona.channelLabel': '场合提示词（每条消息都会追加）',
@@ -1523,12 +1525,13 @@ window.__ModuleLoader__.load({
       'promptRefresh.label': 'Prompt refresh',
       'promptRefresh.unit': 'turns between full resends',
       'done.label': 'Task finished',
-      'done.unit': 'Notify me when another session finishes, if I stay away for',
+      'done.unit': 'Notify me when another session finishes, if the pointer moves less than',
       'done.delay': 'Wait seconds',
-      'done.delayUnit': 'seconds — mouse or keyboard input cancels it',
+      'done.delayUnit': 'seconds — under ~4 pointer widths in total',
       'done.hint':
-        'Only sessions other than the WeChat one (that one already answers you). After a task ends the channel watches the desk for this long: any mouse or keyboard input means you are right there, so it stays quiet; no input means it sends "[系统提示] workspace · session · DSH 已跑完" straight to WeChat, without the AI. '
-        + 'Reading the desktop\'s last-input time needs a PowerShell spawn (~0.3 s) per decision.',
+        'Only sessions other than the WeChat one (that one already answers you). After a task ends the pointer is sampled for this long: total travel under 120 px (about four pointer widths) means nobody is sitting there, so it sends "[系统提示] workspace · session · DSH 已跑完" straight to WeChat, without the AI. More travel than that, or steady typing, means you are at the desk and it stays quiet. '
+        + 'A bumped desk no longer cancels the reminder — that is what the threshold is for. '
+        + 'Reading the pointer needs one PowerShell process per decision, alive for the whole window.',
       'promptRefresh.hint':
         'The full prompt is no longer sent every message; a one-line tool reminder goes out each turn. Editing the prompt triggers a resend.',
       'persona.heading': 'Prompt',

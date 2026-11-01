@@ -51,23 +51,30 @@ whether this turn answers at all.
 ### Telling the phone when a desk task finishes
 
 The channel also watches sessions it does **not** own. When one of them goes idle
-(the `agent/status` listener is global), it starts a timer and then answers one
-question: *is anybody at this computer?*
+(the `agent/status` listener is global), it samples the pointer for
+`doneNotifyDelaySec` and then answers one question: *is anybody at this computer?*
 
-- any mouse or keyboard input during the window → you are there, reading it
-  yourself → **stay quiet**;
-- nothing for `doneNotifyDelaySec` (default 30 s) → **send one line**, composed by
-  the channel, not by the model:
+- total pointer travel under **120 px** (about four pointer widths) → nobody is
+  sitting there → **send one line**, composed by the channel, not the model:
 
 ```
 [系统提示] weBot · 修一下发送 · DSH 已跑完
 ```
 
-Presence comes from Windows itself: `GetLastInputInfo` reports how long since the
-last input *anywhere on the session*, so typing in an editor counts as being at the
-desk — a mouse-only check would call that person away. It is reached through a
-PowerShell spawn (~0.3 s, measured), which is why it runs once per finished task and
-never in a loop.
+- more travel than that, or steady typing → you are at the desk → **stay quiet**.
+
+**Why a distance and not "any input".** The first version asked `GetLastInputInfo`
+whether *anything* had happened, and a bumped desk cancels that — a reminder you
+never saw. Measuring how far the pointer travelled separates a nudge from a person
+reaching for the mouse. Typing counts too, as a sample count rather than a distance:
+someone in an editor has not moved the pointer but is plainly present.
+
+**One process, not 120.** Sampling from Node would mean a process launch every
+250 ms. A single PowerShell process is started once and loops internally, returning
+one line — `travel keys` — when the window closes.
+
+Verified against real movement: dragging the pointer 200 px makes the sampler report
+`travelPx: 200`, and the thresholds behave (`119 → away`, `120 → present`).
 
 If the probe cannot run, the message is sent and the log says so: the purpose is to
 reach the phone, and silence would be indistinguishable from a task that never

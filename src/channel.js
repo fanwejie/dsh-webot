@@ -28,7 +28,7 @@ import { MESSAGE_TYPE_USER, getUpdates, sendText } from './protocol/messages.js'
 import { downloadMedia, extensionForName } from './protocol/media.js'
 import { sendMediaToWeChat } from './protocol/outbound-media.js'
 import { ANCHOR_REMINDER, composeTail } from './persona.js'
-import { desktopIdleMs } from './presence.js'
+import { atTheDesk, watchDesk } from './presence.js'
 import { appendEventLog, readState, updateState } from './state.js'
 
 /** Longest slice of one answer sent as a single WeChat message. */
@@ -407,7 +407,13 @@ export function createChannel(options) {
    * process — and its context — just came back.
    */
   const promptMarks = new Map()
-  /** sessionId -> pending "task finished elsewhere" watch timer. */
+  /**
+   * sessionId -> generation of the newest "task finished elsewhere" watch.
+   *
+   * A session that finishes twice supersedes its own earlier watch. The older
+   * sampler keeps running until its window closes and is then ignored by comparing
+   * generations, which is simpler than killing a child process mid-sleep.
+   */
   const doneNotices = new Map()
   /** One listing of every session on the machine, refreshed at most this often. */
   let sessionCache = { at: 0, items: [] }
@@ -1430,10 +1436,10 @@ export function createChannel(options) {
   /**
    * Watch the desk for a while after a task finishes elsewhere.
    *
-   * The rule is the user's: if the desk stays untouched for `doneNotifyDelaySec`
-   * after the turn ended, nobody is watching, so a message is worth sending. Any
-   * input inside the window cancels it silently — you are right there, reading the
-   * answer yourself.
+   * The rule is the user's: sample the pointer for `doneNotifyDelaySec` after the
+   * turn ended, and if it never travels far enough, nobody is watching — a message
+   * is worth sending. A bumped desk moves the pointer a few pixels; a person
+   * reaching for it moves it much further, which is what the threshold separates.
    */
   function scheduleDoneNotice(sessionId) {
     const state = readState()
@@ -1442,29 +1448,35 @@ export function createChannel(options) {
     if (!boundConversationTarget()) return
 
     const delayMs = (state.doneNotifyDelaySec || 30) * 1000
-    const existing = doneNotices.get(sessionId)
-    if (existing) clearTimeout(existing)
-    const timer = setTimeout(() => {
-      void fireDoneNotice(sessionId, delayMs)
-    }, delayMs)
-    if (typeof timer.unref === 'function') timer.unref()
-    doneNotices.set(sessionId, timer)
+    const generation = (doneNotices.get(sessionId) || 0) + 1
+    doneNotices.set(sessionId, generation)
     note('done', `watch ${shortId(sessionId)} | ${Math.round(delayMs / 1000)}s`)
+
+    void (async () => {
+      // The sampler owns the clock: it resolves when the window closes, so there is
+      // no timer to keep in step with it.
+      const report = await watchDesk(delayMs)
+      if (doneNotices.get(sessionId) !== generation) return
+      doneNotices.delete(sessionId)
+      await fireDoneNotice(sessionId, report)
+    })()
   }
 
-  /** The window closed: notify unless someone proved they are at the desk. */
-  async function fireDoneNotice(sessionId, delayMs) {
-    doneNotices.delete(sessionId)
-
-    const idleMs = desktopIdleMs()
-    if (idleMs !== null && idleMs < delayMs) {
-      note('done', `skip ${shortId(sessionId)} | input ${Math.round(idleMs / 1000)}s ago`)
+  /** The window closed: notify unless the pointer proved somebody is at the desk. */
+  async function fireDoneNotice(sessionId, report) {
+    if (atTheDesk(report)) {
+      note(
+        'done',
+        `skip ${shortId(sessionId)} | moved ${Math.round(report.travelPx)}px (need ${report.thresholdPx}) | keys ${report.keyboardSamples}`,
+      )
       return
     }
     // `null` means the probe could not run. Notifying is the lesser evil: the whole
     // point is to reach the phone, and silence would look exactly like a task that
     // never finished.
-    const presence = idleMs === null ? 'unknown (probe failed)' : `${Math.round(idleMs / 1000)}s idle`
+    const presence = report
+      ? `moved ${Math.round(report.travelPx)}px of ${report.thresholdPx}`
+      : 'unknown (probe failed)'
 
     const target = boundConversationTarget()
     if (!target || !target.contextToken) {
@@ -1624,7 +1636,7 @@ export function createChannel(options) {
     pendingQuestions.clear()
     // Forget the schedule: a fresh row should introduce itself again.
     promptMarks.clear()
-    for (const timer of doneNotices.values()) clearTimeout(timer)
+    // Clearing the generations makes in-flight samplers ignore their own results.
     doneNotices.clear()
     // A held file would otherwise be dropped in silence when the row unloads. It is
     // delivered now, without waiting for a window that will never expire.
