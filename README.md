@@ -127,16 +127,26 @@ and getting the new wording back would mean retyping it.
 
 An agent answer is split into separate WeChat messages at sentence boundaries —
 `。！？!?…`, newlines, and closing Chinese quotes (`」”』`), because that is where a
-person stops and starts a new bubble:
+person stops and starts a new bubble.
+
+**Only long answers are split.** Measured from real traffic, a 73-character reply
+came out as four messages of 10/45/4/12 characters — the report was "乱七八糟",
+and it was right: that is shredding, not texting.
 
 ```
-你要说的事最好别是“在吗”之后接一句广告。
-  -> 你要说的事最好别是“在吗”
-     之后接一句广告。
+reply 82 chars -> 3 bubbles: 21 / 49 / 12
+reply 21 chars -> 1 bubble
 ```
 
 Guards, each for a specific failure:
 
+- **Short replies stay whole** (`MIN_SPLIT_CHARS = 40`). Splitting is meant to make
+  a long answer look like texting, not to cut a short one in half. The
+  quoted-phrase example above no longer splits for this reason: both halves are
+  short enough that two messages read worse than one.
+- **A bubble shorter than 12 characters merges into its neighbour**
+  (`MIN_BUBBLE_CHARS`), on either side of the join, so a short opening sentence does
+  not strand a two-character tail behind it. `还在转。` as its own message is noise.
 - **A boundary only counts when a new thought follows.** Closing quotes end a
   bubble, but not when the next non-space character is `，、；：` — that is
   mid-sentence, and splitting there left a bubble opening with a comma

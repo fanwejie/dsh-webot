@@ -149,6 +149,23 @@ function continuesSentence(text, from) {
 const MAX_BUBBLES = 4
 
 /**
+ * A reply shorter than this stays one message.
+ *
+ * Measured from real traffic: a 73-character answer was being cut into four
+ * messages of 10/45/4/12 characters. Splitting is supposed to make a long answer
+ * look like texting, not to shred a short one.
+ */
+const MIN_SPLIT_CHARS = 40
+
+/**
+ * A bubble shorter than this is a fragment, not a message.
+ *
+ * "还在转。" as its own WeChat message is noise; it belongs on the end of whatever
+ * it follows.
+ */
+const MIN_BUBBLE_CHARS = 12
+
+/**
  * A structured answer must never be chopped into bubbles.
  *
  * Code fences, list markers and tables carry meaning across their line breaks, and
@@ -168,6 +185,8 @@ function splitBubbles(text) {
   const trimmed = String(text || '').trim()
   if (!trimmed) return []
   if (STRUCTURED.test(trimmed)) return splitReply(trimmed)
+  // Short answers are already the thing splitting is trying to produce.
+  if (trimmed.length <= MIN_SPLIT_CHARS) return splitReply(trimmed)
 
   const sentences = []
   let buffer = ''
@@ -202,17 +221,30 @@ function splitBubbles(text) {
     else sentences.splice(index, 1)
   }
 
-  if (sentences.length <= 1) return splitReply(trimmed)
+  // Merge fragments: a piece too short to stand alone, or one that would follow a
+  // piece too short to stand alone, joins its neighbour. Both sides are checked so
+  // a short opening sentence does not leave a two-character tail behind it.
+  const merged = []
+  for (const sentence of sentences) {
+    const previous = merged[merged.length - 1]
+    if (previous !== undefined && (sentence.length < MIN_BUBBLE_CHARS || previous.length < MIN_BUBBLE_CHARS)) {
+      merged[merged.length - 1] = previous + sentence
+      continue
+    }
+    merged.push(sentence)
+  }
 
-  if (sentences.length > MAX_BUBBLES) {
-    const head = sentences.slice(0, MAX_BUBBLES - 1)
+  if (merged.length <= 1) return splitReply(trimmed)
+
+  if (merged.length > MAX_BUBBLES) {
+    const head = merged.slice(0, MAX_BUBBLES - 1)
     // Joined without a separator: the pieces are already trimmed fragments of the
     // same sentence run, and a space would show up in the bubble.
-    head.push(sentences.slice(MAX_BUBBLES - 1).join(''))
+    head.push(merged.slice(MAX_BUBBLES - 1).join(''))
     return head.flatMap((part) => splitReply(part))
   }
 
-  return sentences.flatMap((part) => splitReply(part))
+  return merged.flatMap((part) => splitReply(part))
 }
 
 /** Commands handled by the channel itself; anything else reaches the agent. */
