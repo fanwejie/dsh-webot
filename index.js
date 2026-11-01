@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.15.3'
+const VERSION = '0.16.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -214,6 +214,17 @@ export function apply(ctx) {
   void resolveWorkspace().catch(() => undefined)
 
   const getChannel = () => liveChannel
+
+  // The turn's real end. Without this the answer is flushed by a quiet-period
+  // timer, which fires in the pause a tool call creates — sending half the answer,
+  // then the other half as a second message.
+  const onAgentStatus = (payload) => liveChannel.handleAgentStatus(payload)
+  try {
+    ctx.on('agent/status', onAgentStatus, { global: true })
+    liveChannel.log('boot', 'status listener: global')
+  } catch {
+    liveChannel.log('boot', 'status listener: rejected')
+  }
 
   // Assistant text for every session in this Host. Sessions this channel did not
   // start are ignored inside the handler, which matches them by session id.

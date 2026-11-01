@@ -30,17 +30,20 @@ WeChat ──► iLink getupdates (long poll, 35s)
              │
              ▼
         agent/assistant-stream ──► text-delta accumulated per session
-             │  flush only after the stream is quiet for 700ms
+             │  flush when agent/status goes idle
              ▼
         iLink sendmessage ──► the phone
 ```
 
-Why the settle timer and not "send on `end`": an assistant turn is not one
-stream. Every model step opens its own attempt and emits its own `end` frame, so
-a turn that calls a tool produces several. Flushing on each `end` splits one
-answer into several WeChat messages; flushing on the `finish` chunk is worse,
-because that fires once per step too. A `start` arriving inside the quiet window
-cancels the flush — which is exactly the tool-call case.
+**When the answer is sent.** An assistant turn is not one stream: every model step
+opens its own attempt and emits its own `end` frame, so a turn that calls a tool
+produces several, with a pause in between. A quiet-period timer fires inside that
+pause — which is why one answer once arrived as two messages with different
+content, while DSH showed only the final one.
+
+The flush is therefore driven by `agent/status` going `idle`: no driver remains for
+that session, so everything accumulated is the finished answer. A 3 s
+`FALLBACK_FLUSH_MS` covers a stream that ends without that transition.
 
 ### Interrupting a running turn
 

@@ -5,15 +5,20 @@
  * reply aggregator that turns `agent/assistant-stream` text deltas into one WeChat
  * message per answer.
  *
- * ## Why the reply waits for a settle timer
+ * ## When the reply is sent
  *
  * An assistant turn is not one stream. Every model step opens its own attempt and
- * emits its own `end` frame, so a turn that calls a tool produces several. Sending
- * on each `end` splits one answer into several WeChat messages; sending on the
- * `finish` chunk is worse, because that fires once per step too. The aggregator
- * therefore appends text deltas and flushes only after the stream has been quiet
- * for {@link SETTLE_MS} — a `start` arriving inside that window cancels the flush,
- * which is exactly the tool-call case.
+ * emits its own `end` frame, so a turn that calls a tool produces several, with a
+ * pause in between that is longer than any short quiet period.
+ *
+ * That pause is what made one answer arrive as two WeChat messages with different
+ * content: a 700 ms quiet timer fired inside it, sent the text so far, and the rest
+ * followed after the tool returned.
+ *
+ * The flush is therefore driven by `agent/status` going `idle` — the point where no
+ * driver remains for that session and everything accumulated belongs to the answer
+ * that just finished. {@link FALLBACK_FLUSH_MS} only covers a stream that ends
+ * without that transition.
  *
  * @module dsh-webot/channel
  */
@@ -31,8 +36,15 @@ import { appendEventLog, readState, updateState } from './state.js'
 /** Longest slice of one answer sent as a single WeChat message. */
 const MAX_REPLY_CHARS = 1200
 
-/** How long the stream must be quiet before the answer is flushed. */
-const SETTLE_MS = 700
+/**
+ * Fallback quiet period before an answer is flushed.
+ *
+ * Not the primary signal any more. A turn that calls a tool pauses for far longer
+ * than this between steps, and flushing there sent half the answer, then the other
+ * half as a second message. `agent/status` going `idle` is the real end of a turn;
+ * this timer only covers a stream that ends without that transition.
+ */
+const FALLBACK_FLUSH_MS = 3000
 
 /** Pause after a poll or send failure before trying again. */
 const RETRY_MS = 1500
@@ -1314,8 +1326,31 @@ export function createChannel(options) {
       sessionId,
       setTimeout(() => {
         void flush(sessionId)
-      }, SETTLE_MS),
+      }, FALLBACK_FLUSH_MS),
     )
+  }
+
+  /**
+   * Flush the moment the turn's driver goes idle.
+   *
+   * This is what stops one answer arriving as two messages: a turn that calls a
+   * tool pauses between steps, and any quiet-period timer fires in that gap. `idle`
+   * means no driver remains, so everything accumulated belongs to the answer that
+   * just finished.
+   */
+  function handleAgentStatus(payload) {
+    if (!payload || payload.status !== 'idle') return
+    const sessionId = sessionIdOf(payload)
+    if (!sessionId) return
+    if (!replyTargets.has(sessionId)) return
+    if (!(pendingText.get(sessionId) || '').trim()) return
+    const timer = settleTimers.get(sessionId)
+    if (timer) {
+      clearTimeout(timer)
+      settleTimers.delete(sessionId)
+    }
+    note('flush', `${sessionId} · idle`)
+    void flush(sessionId)
   }
 
   /** Feed one `agent/assistant-stream` payload. Sessions this channel does not own are ignored. */
@@ -1457,6 +1492,7 @@ export function createChannel(options) {
   }
 
   return {
+    handleAgentStatus,
     handleAssistantStream,
     handleApproval,
     handleQuestion,
