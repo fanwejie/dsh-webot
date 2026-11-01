@@ -703,7 +703,7 @@ window.__ModuleLoader__.load({
           null,
           h(
             'div',
-            { style: { ...PANEL_CARD, display: 'flex', alignItems: 'center', gap: '8px' } },
+            { style: { ...PANEL_CARD, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', rowGap: '6px' } },
             h(StatusDot, {
               tone: status.data.connected
                 ? 'var(--dsw-alias-state-success-primary)'
@@ -713,6 +713,22 @@ window.__ModuleLoader__.load({
               status.data.connected ? t('status.connected') : t('status.bound')),
             h('span', { style: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)' } },
               status.data.connected ? t('status.pollingNote') : t('status.boundNote')),
+            // Actions belong on the line they act on: "已连接" is what you refresh,
+            // and re-binding is the same subject. Pushed right so the state reads
+            // first and the buttons stay out of the text's way.
+            h('span', { style: { flex: 1 } }),
+            h(
+              'span',
+              { style: { display: 'flex', gap: '8px', flexShrink: 0 } },
+              h(Btn, { label: t('status.refresh'), onClick: refreshStatus }),
+              h(Btn, {
+                label: t('login.rebind'),
+                onClick: () => {
+                  setForce(true)
+                  restart()
+                },
+              }),
+            ),
           ),
           h(
             'div',
@@ -892,16 +908,6 @@ window.__ModuleLoader__.load({
             ),
           ),
           h('p', { style: MUTED }, t('bind.commands')),
-          h('div', { style: { marginTop: '12px', display: 'flex', gap: '8px' } },
-            h(Btn, {
-              label: t('login.rebind'),
-              onClick: () => {
-                setForce(true)
-                restart()
-              },
-            }),
-            h(Btn, { label: t('status.refresh'), onClick: refreshStatus }),
-          ),
         )
       }
 
