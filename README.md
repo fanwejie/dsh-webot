@@ -62,6 +62,40 @@ M4 fixes it in two ways:
   conversation to any of them — including one you already had — or detaches it,
   so the next message starts a fresh session inside the workspace.
 
+## Persona and register
+
+Two registers, one conversation:
+
+| Command | Effect |
+| --- | --- |
+| `/chat` (default) | Prepend the persona card: a chat partner, not an assistant |
+| `/work` | Drop the card and prepend a one-line "工具型助手" instruction instead |
+| `/role` | List the cards in `personas/` and show the current one |
+| `/role <name>` | Switch cards; the next message uses it |
+
+Cards are plain markdown under `personas/`. Editing the file needs no code change
+and no restart — the next message reads it. One card is capped at 8000 characters
+because it is repeated on every turn.
+
+The shipped card, `personas/dafeiyu.md`, is adapted from
+[`chennianlaobai/qq-ai-bot` → `persona.md`](https://github.com/chennianlaobai/qq-ai-bot/blob/main/persona.md)
+(MIT, © chennianlaobai). It is **not** a verbatim copy: the original is written for
+a QQ group, so the group framing, the `昵称: 内容` transcript convention, the `@`
+convention and the whole `[表情:xxx]` section were removed — this channel is a
+one-to-one WeChat chat and cannot send custom stickers, so those instructions
+would only produce literal text. The tone is unchanged. The file's header comment
+records the source and the changes; `readRole` strips that comment before
+injection.
+
+**Why the card is prepended rather than registered as a prompt section.** The
+correct home is a section on the *agent's* context so it is scoped to WeChat
+sessions, but `systemPrompt.section()` registers globally for the calling context,
+and this plugin's context is the root — the persona would then appear in every
+session in DSH, including the ones driven at the desk. Scoping needs the agent
+context from `agent/created`, which is a bigger change than this feature needs
+yet. Prepending is isolated by construction, and an identical prefix still hits the
+prompt cache.
+
 ## Commands from WeChat
 
 Handled by the channel itself; they never reach the agent. Anything else is a

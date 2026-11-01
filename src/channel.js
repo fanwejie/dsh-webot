@@ -25,6 +25,7 @@ import path from 'node:path'
 import { MESSAGE_TYPE_USER, getUpdates, sendText } from './protocol/messages.js'
 import { downloadMedia, extensionForName } from './protocol/media.js'
 import { sendMediaToWeChat } from './protocol/outbound-media.js'
+import { DEFAULT_ROLE, personaPrefix, roleNames } from './persona.js'
 import { appendEventLog, readState, updateState } from './state.js'
 
 /** Longest slice of one answer sent as a single WeChat message. */
@@ -119,7 +120,17 @@ function splitReply(text) {
 }
 
 /** Commands handled by the channel itself; anything else reaches the agent. */
-const KNOWN_COMMANDS = new Set(['help', 'list', 'switch', 'new', 'current', 'cancel'])
+const KNOWN_COMMANDS = new Set([
+  'help',
+  'list',
+  'switch',
+  'new',
+  'current',
+  'cancel',
+  'chat',
+  'work',
+  'role',
+])
 
 /** Rows one `/list` screen shows. */
 const MAX_LIST_ROWS = 10
@@ -184,6 +195,10 @@ const HELP_TEXT = [
   '/new 标题 — 新建会话并切过去',
   '/current — 当前会话',
   '/cancel — 停止正在跑的任务',
+  '',
+  '/chat — 聊天模式（套人格卡，默认）',
+  '/work — 干活模式（不套人格，直接说事）',
+  '/role — 看有哪些人格；/role 名字 切换',
   '/help — 这份说明',
   '',
   '其它任何内容都会直接发给当前会话的 agent。',
@@ -564,8 +579,8 @@ export function createChannel(options) {
       }
     }
 
-    const body = [text, ...mediaNotes].filter((part) => part).join('\n\n')
-    if (!body) {
+    const content = [text, ...mediaNotes].filter((part) => part).join('\n\n')
+    if (!content) {
       await sendReply(
         account.accountId,
         userId,
@@ -574,6 +589,13 @@ export function createChannel(options) {
       )
       return
     }
+
+    // The persona goes in front of this turn's content, not in place of it: an
+    // empty message must never become "just the persona", so the emptiness check
+    // happens before the prefix is added.
+    const state = readState()
+    const prefix = personaPrefix({ mode: state.personaMode, role: state.personaRole })
+    const body = prefix ? `${prefix}\n\n${content}` : content
 
     await sessionController.prompt(
       {
@@ -921,6 +943,32 @@ export function createChannel(options) {
       })
       const title = found ? readTitle(found) : ''
       return reply(`已切换到 ${shortId(sessionId)}${title ? '：' + title : ''}`)
+    }
+
+    if (command.name === 'chat') {
+      updateState({ personaMode: 'chat' })
+      const role = readState().personaRole || DEFAULT_ROLE
+      return reply(`切回聊天模式了，人格是「${role}」`)
+    }
+
+    if (command.name === 'work') {
+      updateState({ personaMode: 'work' })
+      return reply('切到干活模式：不套人格，直接说事。要聊天就发 /chat。')
+    }
+
+    if (command.name === 'role') {
+      const names = roleNames()
+      if (!command.argument) {
+        return reply(
+          `可用人格：${names.join('、') || '（无）'}\n当前：${readState().personaRole || DEFAULT_ROLE}\n用 /role 名字 切换`,
+        )
+      }
+      const wanted = command.argument.replace(/\.md$/i, '').trim()
+      if (!names.includes(wanted)) {
+        return reply(`没有这个人格：${wanted}\n可用：${names.join('、') || '（无）'}`)
+      }
+      updateState({ personaRole: wanted })
+      return reply(`人格换成「${wanted}」了`)
     }
 
     return reply(HELP_TEXT)

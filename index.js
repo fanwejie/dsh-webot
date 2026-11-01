@@ -31,7 +31,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.9.0'
+const VERSION = '0.10.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -121,6 +121,8 @@ function readStatus() {
     binding: readBinding(state),
     approvalMode: state.approvalMode || 'phone',
     approvalTimeoutSec: state.approvalTimeoutSec || 30,
+    personaMode: state.personaMode || 'chat',
+    personaRole: state.personaRole || 'dafeiyu',
     diagnostics: {
       statePath: stateFilePath(),
       workspace: WORKSPACE_DIRECTORY,

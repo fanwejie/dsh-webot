@@ -133,6 +133,11 @@ export function normalizeState(raw) {
     // permission prompt blocks the agent turn, so an unanswered one is a stalled
     // machine; refusing is the safe default and the user can always re-ask.
     approvalTimeoutSec: clampTimeout(source.approvalTimeoutSec),
+    // Which register the channel talks in. `chat` prepends a persona card;
+    // `work` swaps it for a one-line "工具型助手" instruction. Per conversation
+    // state would be nicer, but there is exactly one conversation per account.
+    personaMode: source.personaMode === 'work' ? 'work' : 'chat',
+    personaRole: text(source.personaRole, 64) || 'dafeiyu',
     lastError:
       source.lastError && typeof source.lastError === 'object'
         ? {
