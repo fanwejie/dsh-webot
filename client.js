@@ -83,7 +83,7 @@ window.__ModuleLoader__.load({
       gap: '4px',
       height: '28px',
       padding: '0 10px',
-      border: '0.5px solid var(--dsw-alias-border-l2)',
+      border: '1px solid var(--dsw-alias-border-l2)',
       borderRadius: 'var(--dsw-radius-sm)',
       background: 'transparent',
       color: 'var(--dsw-alias-label-primary)',
@@ -232,7 +232,7 @@ window.__ModuleLoader__.load({
       width: '140px',
       padding: '0 8px',
       borderRadius: 'var(--dsw-radius-sm)',
-      border: '0.5px solid var(--dsw-alias-border-l2)',
+      border: '1px solid var(--dsw-alias-border-l2)',
       background: 'var(--dsw-alias-bg-base)',
       color: 'var(--dsw-alias-label-primary)',
       fontFamily: 'inherit',
@@ -248,7 +248,7 @@ window.__ModuleLoader__.load({
       maxWidth: '260px',
       padding: '0 8px',
       borderRadius: 'var(--dsw-radius-sm)',
-      border: '0.5px solid var(--dsw-alias-border-l2)',
+      border: '1px solid var(--dsw-alias-border-l2)',
       background: 'var(--dsw-alias-bg-base)',
       color: 'var(--dsw-alias-label-primary)',
       fontFamily: 'inherit',
@@ -263,7 +263,7 @@ window.__ModuleLoader__.load({
       maxWidth: '560px',
       padding: '8px',
       borderRadius: 'var(--dsw-radius-sm)',
-      border: '0.5px solid var(--dsw-alias-border-l2)',
+      border: '1px solid var(--dsw-alias-border-l2)',
       background: 'var(--dsw-alias-bg-base)',
       color: 'var(--dsw-alias-label-primary)',
       fontFamily: 'inherit',
@@ -381,7 +381,7 @@ window.__ModuleLoader__.load({
               width: '14px',
               height: '14px',
               borderRadius: '50%',
-              border: '0.5px solid var(--dsw-alias-border-l2)',
+              border: '1px solid var(--dsw-alias-border-l2)',
               color: 'var(--dsw-alias-label-secondary)',
               fontSize: '10px',
               lineHeight: '1',
@@ -486,11 +486,12 @@ window.__ModuleLoader__.load({
       position: 'relative',
       marginTop: '22px',
       padding: '16px 14px 8px',
-      // 1px of `border-l2`, not the 0.5px hairline the cards use: on a dark surface a
-      // hairline of `l1` is essentially invisible, which is exactly what was reported.
+      // Thicker than any control inside it, in the stronger of the two border tokens:
+      // a hairline of `l1` is essentially invisible on a dark surface, which is what
+      // was reported, and 1px still read as too thin next to it.
       // The box has no fill on purpose — the legend can then mask the border with the
       // panel's own background without leaving a rectangle of the wrong colour.
-      border: '1px solid var(--dsw-alias-border-l2)',
+      border: '2px solid var(--dsw-alias-border-l2)',
       borderRadius: 'var(--dsw-radius-md)',
     }
 
