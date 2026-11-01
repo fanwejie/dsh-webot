@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.19.5'
+const VERSION = '0.20.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.

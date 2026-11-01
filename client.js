@@ -190,9 +190,9 @@ window.__ModuleLoader__.load({
       lineHeight: '18px',
     }
 
-    // 104px fits an eight-character Chinese label on one line; "权限请求在哪回答"
-    // wrapped at 96 and pushed its control a line down.
-    const FIELD_NAME = { flex: '0 0 104px', color: 'var(--dsw-alias-label-secondary)' }
+    // Wide enough for an eight-character label plus its `?` icon: "在哪回答权限请求"
+    // is ~96px, the icon adds ~18, and a fixed column keeps every control aligned.
+    const FIELD_NAME = { flex: '0 0 136px', color: 'var(--dsw-alias-label-secondary)' }
 
     const FIELD_VALUE = {
       flex: '1 1 auto',
@@ -330,6 +330,95 @@ window.__ModuleLoader__.load({
         'aria-hidden': 'true',
         style: { width: '8px', height: '8px', borderRadius: '50%', background: tone, flex: '0 0 auto' },
       })
+    }
+
+    /**
+     * A `?` that explains its field while the pointer is on it.
+     *
+     * These explanations used to be paragraphs under the controls, which made the
+     * panel read like documentation and pushed every real control apart. Hidden
+     * behind a hover, the default view is short and the detail is one gesture away.
+     *
+     * `position: fixed` with measured coordinates, not `absolute`: the panel body
+     * scrolls, and an absolutely positioned tip would be clipped at the scroll
+     * container's edge — precisely for the fields near the bottom.
+     */
+    function Hint({ t, text }) {
+      const [anchor, setAnchor] = React.useState(null)
+      const ref = React.useRef(null)
+      if (!text) return null
+
+      const open = () => {
+        const el = ref.current
+        if (!el) return
+        const rect = el.getBoundingClientRect()
+        const width = 264
+        const left = Math.min(Math.max(8, rect.left), window.innerWidth - width - 8)
+        // Below the icon unless that would run off the bottom, in which case above.
+        const below = rect.bottom + 6
+        const top = below + 120 > window.innerHeight ? Math.max(8, rect.top - 126) : below
+        setAnchor({ left, top })
+      }
+
+      return h(
+        'span',
+        { style: { display: 'inline-flex', alignItems: 'center', marginLeft: '4px' } },
+        h(
+          'span',
+          {
+            ref,
+            role: 'button',
+            tabIndex: 0,
+            'aria-label': t('hint.show'),
+            onMouseEnter: open,
+            onFocus: open,
+            onMouseLeave: () => setAnchor(null),
+            onBlur: () => setAnchor(null),
+            style: {
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: '14px',
+              height: '14px',
+              borderRadius: '50%',
+              border: '0.5px solid var(--dsw-alias-border-l3)',
+              color: 'var(--dsw-alias-label-secondary)',
+              fontSize: '10px',
+              lineHeight: '1',
+              cursor: 'help',
+              flex: '0 0 auto',
+              userSelect: 'none',
+            },
+          },
+          '?',
+        ),
+        anchor
+          ? h(
+              'span',
+              {
+                role: 'tooltip',
+                style: {
+                  position: 'fixed',
+                  left: anchor.left + 'px',
+                  top: anchor.top + 'px',
+                  width: '264px',
+                  zIndex: 1200,
+                  padding: '8px 10px',
+                  borderRadius: 'var(--dsw-radius-md)',
+                  background: 'var(--dsw-alias-bg-base)',
+                  color: 'var(--dsw-alias-label-primary)',
+                  border: '0.5px solid var(--dsw-alias-border-l1)',
+                  boxShadow: '0 8px 20px rgba(0, 0, 0, 0.28)',
+                  fontSize: '12px',
+                  lineHeight: '18px',
+                  fontWeight: 400,
+                  whiteSpace: 'normal',
+                },
+              },
+              text,
+            )
+          : null,
+      )
     }
 
     /* ------------------------------------------------------------------ *
@@ -801,7 +890,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: { ...FIELD_ROW, alignItems: 'center', marginTop: '10px' } },
-            h('span', { style: FIELD_NAME }, t('approval.mode')),
+            h('span', { style: FIELD_NAME }, t('approval.mode'), h(Hint, { t, text: t('approval.hint') })),
             h(
               'select',
               {
@@ -817,7 +906,7 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: { ...FIELD_ROW, alignItems: 'center' } },
-            h('span', { style: FIELD_NAME }, t('approval.timeout')),
+            h('span', { style: FIELD_NAME }, t('approval.timeout'), h(Hint, { t, text: t('approval.timeoutHint') })),
             h('input', {
               type: 'number',
               min: 5,
@@ -839,12 +928,10 @@ window.__ModuleLoader__.load({
             }),
             h('span', { style: { ...MUTED, margin: 0 } }, t('approval.timeoutUnit')),
           ),
-          h('p', { style: MUTED }, t('approval.timeoutHint')),
-          h('p', { style: MUTED }, t('approval.hint')),
           h(
             'div',
             { style: { ...FIELD_ROW, alignItems: 'center' } },
-            h('span', { style: FIELD_NAME }, t('merge.label')),
+            h('span', { style: FIELD_NAME }, t('merge.label'), h(Hint, { t, text: t('merge.hint') })),
             h('input', {
               type: 'number',
               min: 0,
@@ -864,11 +951,10 @@ window.__ModuleLoader__.load({
             }),
             h('span', { style: { ...MUTED, margin: 0 } }, t('merge.unit')),
           ),
-          h('p', { style: MUTED }, t('merge.hint')),
           h(
             'div',
             { style: { ...FIELD_ROW, alignItems: 'center' } },
-            h('span', { style: FIELD_NAME }, t('promptRefresh.label')),
+            h('span', { style: FIELD_NAME }, t('promptRefresh.label'), h(Hint, { t, text: t('promptRefresh.hint') })),
             h('input', {
               type: 'number',
               min: 1,
@@ -890,7 +976,6 @@ window.__ModuleLoader__.load({
             }),
             h('span', { style: { ...MUTED, margin: 0 } }, t('promptRefresh.unit')),
           ),
-          h('p', { style: MUTED }, t('promptRefresh.hint')),
           h(
             'div',
             {
@@ -900,7 +985,7 @@ window.__ModuleLoader__.load({
                 borderTop: '0.5px solid var(--dsw-alias-border-l1)',
               },
             },
-            h('h3', { style: SECTION_TITLE }, t('persona.heading')),
+            h('h3', { style: SECTION_TITLE }, t('persona.heading'), h(Hint, { t, text: t('persona.hint') })),
             h('p', { style: { ...MUTED, marginTop: '10px' } }, t('persona.channelLabel')),
             h('textarea', {
               value: draftChannel === null ? String(status.data.channelPrompt || '') : draftChannel,
@@ -924,10 +1009,8 @@ window.__ModuleLoader__.load({
                 label: t('persona.restore'),
                 onClick: () => setDraftChannel(String(status.data.defaultChannelPrompt || '')),
               }),
-              h('span', { style: { ...MUTED, margin: 0 } }, t('persona.hint')),
             ),
-          ),
-          h(
+          ),          h(
             'section',
             { style: { ...PANEL_CARD, marginTop: '16px' } },
             h('h3', { style: SECTION_TITLE }, t('bind.usageHeading')),
@@ -1296,6 +1379,7 @@ window.__ModuleLoader__.load({
       'login.cancel': '取消重绑',
       'login.retry': '重试',
       'footer.hint': '按 Esc 关闭',
+      'hint.show': '说明',
     }
 
     const EN = {
@@ -1392,6 +1476,7 @@ window.__ModuleLoader__.load({
       'login.cancel': 'Cancel rebinding',
       'login.retry': 'Retry',
       'footer.hint': 'Press Esc to close',
+      'hint.show': 'Show explanation',
     }
 
     return {
