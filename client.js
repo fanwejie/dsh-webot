@@ -1225,7 +1225,11 @@ window.__ModuleLoader__.load({
                   'aria-label': t('scenario.label'),
                   style: {
                     ...SELECT,
-                    maxWidth: '220px',
+                    // Longer than the shared select: scenario names are what the user
+                    // reads here, and a 220px box truncated them to "微信控制 …".
+                    flex: '0 1 360px',
+                    minWidth: '240px',
+                    maxWidth: '100%',
                     opacity: status.data.channelPromptEnabled === false ? 0.5 : 1,
                   },
                 },
