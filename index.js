@@ -31,7 +31,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.6.2'
+const VERSION = '0.6.3'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -119,7 +119,8 @@ function readStatus() {
     errors: [...live.errors, ...(state.lastError ? [state.lastError.message] : [])],
     conversationKey: conversationKeyFor(state),
     binding: readBinding(state),
-    approvalMode: state.approvalMode || 'both',
+    approvalMode: state.approvalMode || 'phone',
+    approvalTimeoutSec: state.approvalTimeoutSec || 30,
     diagnostics: {
       statePath: stateFilePath(),
       workspace: WORKSPACE_DIRECTORY,
@@ -371,12 +372,33 @@ export function apply(ctx) {
   register('/api/webot/settings', ['POST'], async (request) => {
     try {
       const payload = await request.json().catch(() => ({}))
-      const mode = typeof payload?.approvalMode === 'string' ? payload.approvalMode : ''
-      if (!['phone', 'desktop'].includes(mode)) {
-        return json({ ok: false, error: 'approvalMode 只能是 phone / desktop' }, 400)
+      const patch = {}
+
+      if (payload && typeof payload.approvalMode === 'string') {
+        if (!['phone', 'desktop'].includes(payload.approvalMode)) {
+          return json({ ok: false, error: 'approvalMode 只能是 phone / desktop' }, 400)
+        }
+        patch.approvalMode = payload.approvalMode
       }
-      updateState({ approvalMode: mode })
-      return json({ ok: true, approvalMode: mode })
+
+      if (payload && payload.approvalTimeoutSec !== undefined) {
+        const seconds = Number(payload.approvalTimeoutSec)
+        if (!Number.isFinite(seconds) || seconds < 5 || seconds > 300) {
+          return json({ ok: false, error: 'approvalTimeoutSec 需在 5–300 秒之间' }, 400)
+        }
+        patch.approvalTimeoutSec = Math.round(seconds)
+      }
+
+      if (Object.keys(patch).length === 0) {
+        return json({ ok: false, error: '没有可更新的字段' }, 400)
+      }
+
+      const next = updateState(patch)
+      return json({
+        ok: true,
+        approvalMode: next.approvalMode,
+        approvalTimeoutSec: next.approvalTimeoutSec,
+      })
     } catch (error) {
       return failure(error)
     }

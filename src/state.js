@@ -39,6 +39,17 @@ const MAX_ACCOUNTS = 5
  */
 const APPROVAL_MODES = new Set(['phone', 'desktop'])
 
+/** Default and bounds for how long a phone has to answer a permission prompt. */
+const DEFAULT_APPROVAL_TIMEOUT_SEC = 30
+const MIN_APPROVAL_TIMEOUT_SEC = 5
+const MAX_APPROVAL_TIMEOUT_SEC = 300
+
+function clampTimeout(value) {
+  const seconds = Number(value)
+  if (!Number.isFinite(seconds)) return DEFAULT_APPROVAL_TIMEOUT_SEC
+  return Math.min(MAX_APPROVAL_TIMEOUT_SEC, Math.max(MIN_APPROVAL_TIMEOUT_SEC, Math.round(seconds)))
+}
+
 /** Directory that owns the state file. */
 export function stateDirectory() {
   const home = process.env.DSH_HOME && process.env.DSH_HOME.trim()
@@ -118,6 +129,10 @@ export function normalizeState(raw) {
     // `phone`, which is the only mode where the desk cannot be left holding an
     // orphaned dialog.
     approvalMode: source.approvalMode === 'desktop' ? 'desktop' : 'phone',
+    // Seconds the phone has to answer before the request is auto-rejected. A
+    // permission prompt blocks the agent turn, so an unanswered one is a stalled
+    // machine; refusing is the safe default and the user can always re-ask.
+    approvalTimeoutSec: clampTimeout(source.approvalTimeoutSec),
     lastError:
       source.lastError && typeof source.lastError === 'object'
         ? {

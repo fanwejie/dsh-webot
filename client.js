@@ -415,6 +415,9 @@ window.__ModuleLoader__.load({
       const [picker, setPicker] = React.useState(false)
       const [sessions, setSessions] = React.useState({ phase: 'idle' })
       const [bindError, setBindError] = React.useState('')
+      // Draft for the timeout field: committed on blur, so a three-digit entry is
+      // one write instead of three failed range checks on the way there.
+      const [timeoutDraft, setTimeoutDraft] = React.useState('')
 
       function loadSessions() {
         setSessions({ phase: 'loading' })
@@ -454,6 +457,26 @@ window.__ModuleLoader__.load({
               setBindError((body && body.error) || t('bind.failed'))
               return
             }
+            refreshStatus()
+          })
+          .catch((error) => setBindError((error && error.message) || String(error)))
+      }
+
+      function setApprovalTimeout(seconds) {
+        const value = Number(seconds)
+        if (!Number.isFinite(value) || value < 5 || value > 300) {
+          setBindError(t('approval.timeoutRange'))
+          setTimeoutDraft('')
+          return
+        }
+        setBindError('')
+        post(SETTINGS_URL, { approvalTimeoutSec: value })
+          .then((body) => {
+            if (!body || body.ok !== true) {
+              setBindError((body && body.error) || t('bind.failed'))
+              return
+            }
+            setTimeoutDraft('')
             refreshStatus()
           })
           .catch((error) => setBindError((error && error.message) || String(error)))
@@ -609,6 +632,28 @@ window.__ModuleLoader__.load({
               h('option', { value: 'phone' }, t('approval.phone')),
               h('option', { value: 'desktop' }, t('approval.desktop')),
             ),
+          ),
+          h(
+            'div',
+            { style: { ...FIELD_ROW, alignItems: 'center' } },
+            h('span', { style: FIELD_NAME }, t('approval.timeout')),
+            h('input', {
+              type: 'number',
+              min: 5,
+              max: 300,
+              value:
+                timeoutDraft === '' ? String(status.data.approvalTimeoutSec || 30) : timeoutDraft,
+              onChange: (event) => setTimeoutDraft(event.target.value),
+              onBlur: () => {
+                if (timeoutDraft !== '') setApprovalTimeout(timeoutDraft)
+              },
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') event.currentTarget.blur()
+              },
+              'aria-label': t('approval.timeout'),
+              style: { ...TEXT_INPUT, width: '80px', letterSpacing: 'normal' },
+            }),
+            h('span', { style: { ...MUTED, margin: 0 } }, t('approval.timeoutUnit')),
           ),
           h('p', { style: MUTED }, t('approval.hint')),
           h('p', { style: MUTED }, t('bind.commands')),
@@ -918,6 +963,9 @@ window.__ModuleLoader__.load({
       'approval.desktop': '只在桌面（通道不介入）',
       'approval.hint':
         '两者不能同时生效：请求只有一个归属，如果两边都开，输的那一边会在界面上留下一个关不掉的弹窗——宿主没有撤回接口。',
+      'approval.timeout': '超时',
+      'approval.timeoutUnit': '秒内没回复就自动拒绝',
+      'approval.timeoutRange': '超时需在 5–300 秒之间',
       'login.phase.idle': '准备中',
       'login.phase.starting': '正在获取二维码',
       'login.phase.waiting': '等待扫码',
@@ -993,6 +1041,9 @@ window.__ModuleLoader__.load({
       'approval.desktop': 'Desktop only (channel stays out)',
       'approval.hint':
         'These cannot both be on. A request has exactly one owner, and if both sides are started the loser leaves a dialog on screen that nothing can close — the host has no withdraw call.',
+      'approval.timeout': 'Timeout',
+      'approval.timeoutUnit': 'seconds, then reject automatically',
+      'approval.timeoutRange': 'Timeout must be between 5 and 300 seconds',
       'login.phase.idle': 'Preparing',
       'login.phase.starting': 'Fetching the QR code',
       'login.phase.waiting': 'Waiting for a scan',

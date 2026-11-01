@@ -502,8 +502,29 @@ export function createChannel(options) {
     // losing would leave the browser holding a dialog that only that answerer
     // can close, and the host has no withdraw call: the prompt stays on screen
     // after the turn has already moved on.
+    //
+    // An unanswered prompt blocks the agent turn, so it expires instead of
+    // waiting forever. Rejecting is the safe side — the ask can be repeated.
+    const timeoutSec = readState().approvalTimeoutSec
+    let timedOut = false
+    const timer = setTimeout(() => {
+      timedOut = true
+      note('approval', `timeout | ${timeoutSec}s, auto-reject`)
+      wait.finish('rejected')
+    }, timeoutSec * 1000)
+
     const outcome = await wait.promise
+    clearTimeout(timer)
     note('approval', `answered ${outcome} | phone`)
+
+    if (timedOut) {
+      await sendReply(
+        target.accountId,
+        target.toUserId,
+        target.contextToken,
+        `${timeoutSec} 秒内没有回复，已自动拒绝。需要的话重新让 agent 执行一次。`,
+      )
+    }
     return outcome
   }
 

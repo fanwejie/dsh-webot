@@ -108,7 +108,13 @@ host exposes no withdraw call. A request has exactly one owner, so the choice is
 made up front instead of raced.
 
 While a prompt is open the agent turn is blocked on it, so the phone reply is
-consumed before commands and before the agent:
+consumed before commands and before the agent.
+
+**An unanswered prompt expires.** After `approvalTimeoutSec` (default 30,
+5–300) the channel answers `rejected` on your behalf and says so on the phone.
+Waiting forever is the one outcome that is always wrong: the agent turn is
+blocked, the machine sits idle, and nobody learns why. Refusing is safe — the ask
+can simply be repeated.
 
 | Reply | Outcome |
 | --- | --- |
