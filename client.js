@@ -786,8 +786,13 @@ window.__ModuleLoader__.load({
       }
 
       /* --- named channel prompts --- */
-      const scenarios = Array.isArray(status.data.scenarios) ? status.data.scenarios : []
-      const activeId = String(status.data.activeScenarioId || '')
+      // `status.data` does not exist yet on the first render (phase 'loading'), and
+      // these lines run before the loading branch returns. Reading it unguarded threw
+      // during render, which takes the whole panel - and the header button with it -
+      // off screen.
+      const data = status.data || {}
+      const scenarios = Array.isArray(data.scenarios) ? data.scenarios : []
+      const activeId = String(data.activeScenarioId || '')
       const active =
         scenarios.find((item) => item.id === activeId) || scenarios[0] || { id: '', name: '', content: '' }
       // null = no editor open; {id} present = editing that scenario, absent = adding.
@@ -1542,6 +1547,52 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * Keeps a render error inside the panel.
+     *
+     * Without this, an exception while rendering the panel takes down the whole
+     * `settings.action` entry — the button disappears and there is no way back except
+     * reloading the page. That is exactly what a bad `status.data` read did once. A
+     * boundary cannot fix such a bug, but it keeps the door reachable.
+     */
+    let PanelBoundary = (props) => props.children
+    if (typeof React.Component === 'function') {
+      PanelBoundary = class PanelBoundary extends React.Component {
+        constructor(props) {
+          super(props)
+          this.state = { error: null }
+        }
+
+        static getDerivedStateFromError(error) {
+          return { error }
+        }
+
+        render() {
+          if (this.state.error) {
+            return h(
+              'div',
+              { style: CARD, role: 'alert' },
+              h(
+                'div',
+                { style: { padding: '20px' } },
+                h('h3', { style: SECTION_TITLE }, this.props.t('panel.crashed')),
+                h(
+                  'p',
+                  { style: MUTED },
+                  String((this.state.error && this.state.error.message) || this.state.error),
+                ),
+                h(Btn, {
+                  label: this.props.t('panel.close'),
+                  onClick: () => this.props.onClose(),
+                }),
+              ),
+            )
+          }
+          return this.props.children
+        }
+      }
+    }
+
     /** The single `settings.action` entry: the button, plus its panel while open. */
     function WebotEntry({ t }) {
       const visible = usePanelVisible()
@@ -1549,7 +1600,9 @@ window.__ModuleLoader__.load({
         React.Fragment,
         null,
         h(OpenButton, { t, active: visible }),
-        visible ? h(PanelView, { t }) : null,
+        visible
+          ? h(PanelBoundary, { t, onClose: () => setPanelVisible(false) }, h(PanelView, { t }))
+          : null,
       )
     }
 
@@ -1562,6 +1615,7 @@ window.__ModuleLoader__.load({
       'panel.title': 'weBot 设置',
       'panel.subtitle': '微信 ↔ DeepSeek Harness',
       'panel.close': '关闭',
+      'panel.crashed': '面板出错了',
       'status.heading': '连接状态',
       'status.loading': '正在读取状态…',
       'status.refresh': '刷新',
@@ -1703,6 +1757,7 @@ window.__ModuleLoader__.load({
       'panel.title': 'weBot Settings',
       'panel.subtitle': 'WeChat ↔ DeepSeek Harness',
       'panel.close': 'Close',
+      'panel.crashed': 'The panel failed to render',
       'status.heading': 'Connection status',
       'status.loading': 'Reading status…',
       'status.refresh': 'Refresh',
