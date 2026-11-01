@@ -5,10 +5,13 @@
 # header and the full-screen panel it opens.
 #
 # Row id matches the package name: package name, this row id, and the Client
-# module id in client.js must stay equal.
+# module id in client.js must stay equal. The installer resolves the row by this
+# name against the installed package.
 #
-# M1 skeleton: the row carries no config yet. Later milestones add `autoStart`
-# and the binding settings, which are edited from the panel rather than here.
+# The row carries no config. Every setting — the bound account, the approval mode,
+# the prompt, the notification rules — lives in the channel's own state file
+# (`$DSH_HOME/webot/state.json`) and is edited from the panel, so this file never
+# needs editing after install.
 - insert:
     - id: dsh-webot
       name: dsh-webot

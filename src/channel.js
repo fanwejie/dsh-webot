@@ -28,7 +28,7 @@ import { MESSAGE_TYPE_USER, getUpdates, sendText } from './protocol/messages.js'
 import { downloadMedia, extensionForName } from './protocol/media.js'
 import { sendMediaToWeChat } from './protocol/outbound-media.js'
 import { ANCHOR_REMINDER, composeTail } from './persona.js'
-import { atTheDesk, watchDesk } from './presence.js'
+import { PRESENCE_SUPPORTED, atTheDesk, watchDesk } from './presence.js'
 import { activeScenario, appendEventLog, readState, updateState } from './state.js'
 
 /** Longest slice of one answer sent as a single WeChat message. */
@@ -416,6 +416,8 @@ export function createChannel(options) {
    * generations, which is simpler than killing a child process mid-sleep.
    */
   const doneNotices = new Map()
+  /** One log line per process when the presence probe is unsupported, not one per task. */
+  let presenceWarned = false
   /** One listing of every session on the machine, refreshed at most this often. */
   let sessionCache = { at: 0, items: [] }
   /**
@@ -1457,6 +1459,16 @@ export function createChannel(options) {
   function scheduleDoneNotice(sessionId) {
     const state = readState()
     if (!state.doneNotifyEnabled) return
+    // A reminder that fires on every finished task is worse than none. Only Windows
+    // can answer "is somebody here", so elsewhere the feature stays off and says so
+    // once rather than notifying every time.
+    if (!PRESENCE_SUPPORTED) {
+      if (!presenceWarned) {
+        presenceWarned = true
+        note('done', `disabled | presence probe needs Windows (this is ${process.platform})`)
+      }
+      return
+    }
     // Nothing bound means nowhere to send; not an error, just off.
     if (!boundConversationTarget()) return
 

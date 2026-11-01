@@ -1,31 +1,128 @@
 # dsh-webot
 
-WeChat channel for DeepSeek Harness — bind WeChat, then drive the agent on this machine from your phone.
+**微信通道插件，给 DeepSeek Harness 用。** 装上以后，DSH 的设置页右上角会多一个
+「weBot设置」按钮：扫码绑定微信，之后在手机上就能给这台电脑上的 agent 派活、看结果、
+批权限。
 
-**Status: working.** What it does today:
+- 微信里发消息 → DSH 里干活 → 结果发回手机
+- agent 自己在微信里回话（`send_to_wechat` 工具），想分几条就分几条
+- 发图片/文件给它，它会存进工作区并读得懂；它也能反过来发图给你
+- 敏感操作把权限请求推到手机：回 `1` 允许 / `2` 拒绝 / `3` 取消
+- 干活时你插话，它会打断当前这一轮，而不是排队等
+- 别的会话跑完、你又不在电脑前，会给你发一条提醒（仅 Windows）
 
-- a 「weBot设置」 action in the settings header, right of the shipped
-  「打开配置文件」 (`open-document`, order 0) and left of Close;
-- the full-screen panel that action opens;
-- the real Tencent iLink QR handshake: fetch QR, long-poll its status, pairing
-  code, IDC redirect, automatic refresh on expiry, and the resulting binding
-  persisted to disk;
-- the long poll that receives WeChat messages, one DSH session per WeChat
-  conversation;
-- **replies the agent composes and sends itself** through `send_to_wechat`
-  (text and media) — nothing is forwarded automatically;
-- inbound images, files, videos and voice are downloaded, decrypted and placed in
-  the session's workspace, after a merge window that waits for the sentence that
-  explains them;
-- a message arriving mid-task **interrupts** the running turn instead of queueing
-  behind it;
-- `/help`, `/list`, `/switch`, `/new`, `/current`, `/cancel` answered by the channel
-  itself;
-- **permission prompts and questions on the phone** — tool plus reason, answer
-  1 allow once / 2 reject / 3 cancel — claimed only for this channel's own
-  sessions; a session you are driving at the desk keeps its desktop prompt;
-- `GET /api/webot/status` reporting the bound account and its live state (never
-  its token), plus a ring buffer of what the channel recently did.
+---
+
+## 安装
+
+### 前提
+
+| 项 | 要求 |
+|---|---|
+| DeepSeek Harness | 桌面版，能用插件管理（`plugin_manager`） |
+| 系统 | **Windows 10/11** 功能完整；macOS / Linux 除「任务完成提醒」外都可用（原因见下方兼容性） |
+| 网络 | 能访问 `ilinkai.weixin.qq.com`（腾讯 iLink 网关） |
+| 微信 | 手机微信，扫码即可，不需要公众号或企业微信 |
+
+### 三步装好
+
+**1. 把仓库放到一个固定的位置**
+
+```bash
+git clone https://github.com/OWNER/dsh-webot.git
+```
+
+放在哪都行，但**别放在临时目录**——DSH 是链接这个目录的，删了插件就没了。
+
+**2. 让 DSH 安装它**
+
+在 DSH 里打开 **Full access**（安装插件要写 profile，没有权限会被拒），然后直接对
+agent 说：
+
+> 用 plugin_manager 把 `<你克隆下来的绝对路径>` 装成 bundle
+
+它会执行 `install_bundle`，把依赖（`qrcode`）一并装好。安装结果是
+`application: applied` 就算成功；如果返回 `restart-required`，进入第 3 步。
+
+> 装不上时的兜底：这个插件只有一个运行期依赖。如果提示 `二维码依赖未安装（qrcode）`，
+> 进插件目录执行一次 `npm install` 即可，DSH 是直接从目录加载的。
+
+**3. 重启 DSH**
+
+Host 半必须重启才会加载；Client 半（那个按钮和面板）刷新页面即可。
+
+### 绑定
+
+1. DSH → 设置 → 右上角 **「weBot设置」**
+2. 面板会自动拉取二维码，用手机微信扫码
+3. 扫完面板显示「已连接 · 微信消息会送到这里」，绑定关系已写进
+   `%USERPROFILE%\.dsh\webot\state.json`
+
+之后在微信里给这个 bot 发一句话，它就会在 DSH 里建一个会话开始干。
+
+### 第一次用该看到什么
+
+```
+微信：在吗
+→ DSH 里出现一个新会话，工作目录是 %USERPROFILE%\.dsh\dsh_webot
+→ 几秒后微信收到回复
+```
+
+日志在 `%USERPROFILE%\.dsh\webot\events.log`，里面每一行都是一次真实动作
+（`inbound` / `prompt full` / `send ok` / `done sent` …）。**排查问题时先看它。**
+
+---
+
+## 兼容性
+
+| 功能 | Windows | macOS / Linux |
+|---|---|---|
+| 扫码绑定、收发文字 | ✅ | ✅ |
+| 收发图片/文件/视频 | ✅ | ✅ |
+| 权限请求、选择题推到手机 | ✅ | ✅ |
+| 会话命令（`/list` 等） | ✅ | ✅ |
+| 任务完成提醒（判断你离没离开电脑） | ✅ | ❌ 自动关闭 |
+
+**为什么任务完成提醒只在 Windows**：它要判断"人还在不在电脑前"，做法是采样鼠标
+累计移动距离。这需要 `GetCursorPos` / `GetLastInputInfo`，插件里通过 PowerShell 调
+Windows API。macOS 和 Linux 没有免原生依赖的等价物，而这个插件刻意不带 native 模块
+（否则每个用户都要装编译工具链）。
+
+在非 Windows 上这个开关会被**忽略**，日志里记一行
+`done disabled | presence probe needs Windows`，不会退化成"每次任务结束都发微信"。
+
+### 依赖什么 DSH 能力
+
+- 服务：`connection`（注册 HTTP 路由）、`sessionController`（建会话、投递、取消）、`tools`（注册 `send_to_wechat`）
+- 事件：`agent/assistant-stream`、`agent/status`、`approval/request`（waterfall）、`user-questions/request`（waterfall）
+- 槽位：`settings.action`（那个按钮）、`shell.overlay`（面板的挂载点）
+
+这几样只要有一个变了，插件会在启动日志里明确报出来（`tool registry unavailable` /
+`status listener: rejected` 之类），不会静默失效。
+
+---
+
+## 目录
+
+| 路径 | 作用 |
+|---|---|
+| `index.js` | Host 半：HTTP 路由、登录状态机、会话投递、工具注册 |
+| `client.js` | 浏览器半：设置页那个按钮和整个面板（纯 JS，无构建） |
+| `src/protocol/` | iLink 协议：HTTP、登录、消息、媒体下载/上传 |
+| `src/channel.js` | 通道核心：长轮询、消息分发、回复、审批、通知 |
+| `src/state.js` | 状态文件：原子写、白名单校验、旧字段迁移 |
+| `src/persona.js` | 提示词默认值 |
+| `src/presence.js` | 判断"人在不在电脑前"（仅 Windows） |
+| `cordis.patch.yml` | 一行 Host 插件声明 |
+| `locale/` | 插件在插件管理里的标题和描述 |
+| `tools/` | 开发用：读取已安装的 DSH 包（不随插件发布） |
+
+---
+
+## 设计说明（英文）
+
+下面这些是开发过程中记下来的取舍和踩过的坑，保留原文，方便改这个插件的人。
+想看功能怎么用，上面已经写完了。
 
 ## How one message travels
 
@@ -701,10 +798,16 @@ node tools/snippet.mjs .scratch/index.css 'outline' 160 4
 
 ## Install
 
-1. `npm install` in this directory (the `qrcode` dependency).
-2. `plugin_manager` → `install_bundle`, target this directory, profile `desktop`.
-3. Restart DSH for the Host half. The Client half follows the page.
+See 安装 at the top of this file. In short: clone the repository, then
+`plugin_manager` → `install_bundle` with that directory, then restart DSH for the
+Host half. The only runtime dependency is `qrcode`, which the installer pulls in; if
+a linked checkout has no `node_modules`, run `npm install` once in it.
 
 ## Licence
 
-MIT. Protocol reference: `@tencent-weixin/openclaw-weixin` (MIT, Tencent).
+MIT. See [LICENSE](LICENSE).
+
+Protocol reference: `@tencent-weixin/openclaw-weixin` (MIT, Tencent) — the iLink
+endpoints, payload fields and the AES-128-ECB media scheme were read from it. No code
+from that package is vendored here.
+

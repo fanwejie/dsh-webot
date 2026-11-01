@@ -73,13 +73,26 @@ function buildScript(windowMs) {
 }
 
 /**
+ * Whether this machine can answer the question at all.
+ *
+ * The probe is Windows-only: it reads `GetCursorPos` and `GetLastInputInfo`
+ * through PowerShell. On macOS and Linux there is no portable equivalent without a
+ * native dependency, which this plugin deliberately does not carry.
+ *
+ * This is a different situation from a probe that *fails* on Windows: there the
+ * answer is unknown but knowable, so notifying is the lesser evil. Here it is
+ * permanently unknowable, and "always notify" would turn a reminder into spam.
+ */
+export const PRESENCE_SUPPORTED = process.platform === 'win32'
+
+/**
  * Sample the desk for `windowMs` and resolve with what happened.
  *
- * Resolves `null` when the probe cannot run at all (not Windows, no PowerShell,
- * policy block) — the caller decides what an unknown answer means.
+ * Resolves `null` when the probe cannot run (not Windows, no PowerShell, policy
+ * block) — the caller decides what an unknown answer means.
  */
 export function watchDesk(windowMs, thresholdPx = DEFAULT_TRAVEL_PX) {
-  if (process.platform !== 'win32') return Promise.resolve(null)
+  if (!PRESENCE_SUPPORTED) return Promise.resolve(null)
 
   return new Promise((resolve) => {
     let child

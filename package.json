@@ -1,10 +1,30 @@
 {
   "name": "dsh-webot",
-  "version": "0.27.8",
+  "version": "1.0.0",
   "private": true,
   "description": "WeChat channel for DeepSeek Harness: bind WeChat, then drive the agent from your phone.",
   "type": "module",
   "icon": "icon.svg",
+  "keywords": [
+    "dsh",
+    "deepseek-harness",
+    "wechat",
+    "weixin",
+    "ilink",
+    "channel",
+    "plugin"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OWNER/dsh-webot.git"
+  },
+  "homepage": "https://github.com/OWNER/dsh-webot#readme",
+  "bugs": {
+    "url": "https://github.com/OWNER/dsh-webot/issues"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",
@@ -18,7 +38,8 @@
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "dependencies": {
     "qrcode": "^1.5.4"
