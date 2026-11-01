@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.17.0'
+const VERSION = '0.17.1'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -295,7 +295,9 @@ export function apply(ctx) {
             properties: {
               text: {
                 type: 'string',
-                description: '要发的文字。想分成几条微信消息，就像真人那样多调用几次，每次一句',
+                description:
+                  '要发的文字。写成真人说话：短句、直接、有脾气，别客套，别写"已完成/已发送"这种汇报腔。' +
+                  '一条一句话；想分成几条微信消息，就像真人那样多调用几次，每次一句。',
               },
               path: {
                 type: 'string',

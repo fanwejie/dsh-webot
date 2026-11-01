@@ -88,19 +88,44 @@ M4 fixes it in two ways:
 
 ## The prompt
 
-One editable note, **appended after the user's message, on every turn**:
+One editable note, **appended after the user's message, on every turn**. It has
+three parts, and the order is the priority order:
 
-| Field | Purpose |
+| Part | Purpose |
 | --- | --- |
-| 场合提示词 `channelPrompt` | Where the model is talking: a phone, no screen, no file access, send files with `send_to_wechat`, keep it under three lines |
+| The rule | Nothing is auto-sent; a turn that does not call `send_to_wechat` reaches nobody |
+| The channel | A phone, no screen, no file access; how to hand over a file |
+| **The voice** | Who is speaking, and how a message should read |
 
-That is the whole surface. A persona layer used to sit beside it and was removed on
-request: two boxes describing "how to behave" invite the same behaviour to be tuned
-in two places, and the persona text kept fighting the agent's own job. Anything you
-want said about tone now goes in this one box, and it is the same box that already
-knows you are on a phone.
+### Why the voice lives here, and why it is scoped
 
-There is no `/role`, no chat/work switch, and no `personas/` directory any more.
+The tone block opens with a scope line:
+
+> 【怎么说话】下面这些只管你写进 send_to_wechat 的 text，怎么干活、调什么工具、按什么
+> 顺序做、报什么错，一律不受影响。
+
+That line is the whole reason a personality can exist in this design. In tool-only
+mode **the reply is a tool argument**, so the tone can be attached to the argument
+instead of to the turn. The agent still plans, calls tools and reports failures as
+an engineer; only the sentence it hands the phone sounds like a person.
+
+A global "you are 鲸鱼娘" would colour the work too — that is what an earlier
+version did, and it made the agent chatty about its own tool calls. The same cue is
+repeated, shorter, in the `text` parameter's own description, because that is where
+the argument is composed.
+
+What the voice says, in order of how much it matters:
+
+- short: at most two sentences, one if possible;
+- no restating what the user just said, no explaining how it knows, no summaries,
+  no pleasantries;
+- **no "已完成 / 已发送 / 我帮你处理好了" reporting voice** — the result, in plain
+  words;
+- results, errors and decisions still have to be stated clearly, just not in a
+  support-desk tone.
+
+There is no `/role`, no chat/work switch, and no `personas/` directory: one box,
+editable in the panel, is the whole surface.
 
 ### Why it is shaped this way
 
