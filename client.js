@@ -190,7 +190,9 @@ window.__ModuleLoader__.load({
       lineHeight: '18px',
     }
 
-    const FIELD_NAME = { flex: '0 0 96px', color: 'var(--dsw-alias-label-secondary)' }
+    // 104px fits an eight-character Chinese label on one line; "权限请求在哪回答"
+    // wrapped at 96 and pushed its control a line down.
+    const FIELD_NAME = { flex: '0 0 104px', color: 'var(--dsw-alias-label-secondary)' }
 
     const FIELD_VALUE = {
       flex: '1 1 auto',
@@ -837,6 +839,8 @@ window.__ModuleLoader__.load({
             }),
             h('span', { style: { ...MUTED, margin: 0 } }, t('approval.timeoutUnit')),
           ),
+          h('p', { style: MUTED }, t('approval.timeoutHint')),
+          h('p', { style: MUTED }, t('approval.hint')),
           h(
             'div',
             { style: { ...FIELD_ROW, alignItems: 'center' } },
@@ -887,7 +891,6 @@ window.__ModuleLoader__.load({
             h('span', { style: { ...MUTED, margin: 0 } }, t('promptRefresh.unit')),
           ),
           h('p', { style: MUTED }, t('promptRefresh.hint')),
-          h('p', { style: MUTED }, t('approval.hint')),
           h(
             'div',
             {
@@ -1250,12 +1253,15 @@ window.__ModuleLoader__.load({
       'usage.current': '看现在用的是哪个会话',
       'usage.cancel': '停掉正在跑的这一轮',
       'usage.help': '在微信里显示这份说明',
-      'approval.mode': '权限弹窗',
-      'approval.phone': '只在手机（通道接管）',
-      'approval.desktop': '只在桌面（通道不介入）',
-      'approval.hint': '只能二选一：请求只会被一边接住。两边同时接会留下一个关不掉的弹窗（宿主没有撤回接口），所以这里不让两个都开。',
-      'approval.timeout': '超时',
-      'approval.timeoutUnit': '秒（5–300）内没回复就自动拒绝',
+      'approval.mode': '权限请求在哪回答',
+      'approval.phone': '手机上（这个通道接管）',
+      'approval.desktop': '电脑上（通道不参与）',
+      'approval.hint':
+        'agent 要做有风险的操作前，会先停下来等你点头。选"手机上"，请求就发到微信，回 1 允许一次、2 拒绝、3 取消；选"电脑上"，它还是弹在电脑上，这个通道完全不碰。只能二选一：同一个请求只会被一边接住，两边同时开会让另一边留下一个关不掉的弹窗。',
+      'approval.timeout': '等多久算放弃',
+      'approval.timeoutUnit': '秒后当作拒绝（5–300）',
+      'approval.timeoutHint':
+        '超过这个时间没人回复，就当作你拒绝，agent 不会自己往下做。被拒绝不等于出错：它会说明没拿到许可，你可以再让它试一次。',
       'merge.label': '文件合并',
       'merge.unit': '秒内追加的文字会跟文件一起发',
       'merge.hint': '发图/文件后等这么多秒：期间你打字就并成一条发给 agent，没打就等到点再发。填 0 = 不等，立刻发。',
@@ -1341,13 +1347,15 @@ window.__ModuleLoader__.load({
       'usage.current': 'Show which session you are in',
       'usage.cancel': 'Stop the turn that is running',
       'usage.help': 'Show this list in WeChat',
-      'approval.mode': 'Permission prompts',
-      'approval.phone': 'Phone only (channel claims)',
-      'approval.desktop': 'Desktop only (channel stays out)',
+      'approval.mode': 'Where to answer permission requests',
+      'approval.phone': 'On the phone (this channel takes them)',
+      'approval.desktop': 'On the desktop (channel stays out)',
       'approval.hint':
-        'Pick one. A request has exactly one owner — if both sides take it, the other leaves a dialog on screen that nothing can close, because the host has no withdraw call.',
-      'approval.timeout': 'Timeout',
-      'approval.timeoutUnit': 'seconds (5–300) before an automatic reject',
+        'Before a risky action the agent stops and waits for your go-ahead. On "phone", the request is sent to WeChat — reply 1 allow once, 2 reject, 3 cancel. On "desktop", it still pops up on the computer and this channel does not touch it. Pick one: a request has exactly one owner, and starting both leaves a dialog on the other side that nothing can close.',
+      'approval.timeout': 'Give up after',
+      'approval.timeoutUnit': 'seconds without a reply (5–300)',
+      'approval.timeoutHint':
+        'No answer within this time counts as a reject, so the agent never proceeds on its own. A reject is not a failure: the agent will say it did not get permission, and you can let it try again.',
       'merge.label': 'File merge',
       'merge.unit': 'seconds to wait for your follow-up text',
       'merge.hint':
