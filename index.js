@@ -1,12 +1,14 @@
 /**
- * dsh-webot — Host half (M2).
+ * dsh-webot — Host half (M3).
  *
- * Serves the settings panel and owns the one QR login attempt at a time.
+ * Owns three things: the settings panel's routes, the one QR login attempt at a
+ * time, and the channel that carries WeChat messages into agent turns and the
+ * answers back out.
  *
  * Routes are registered on the shared browser connection channel
  * (`ctx.connection.fetch`) rather than the raw web server, so they inherit
- * Harness authentication. That matters here more than in M1: these routes return
- * account identities and start a handshake that ends in a bot token.
+ * Harness authentication. That matters here: these routes return account
+ * identities and start a handshake that ends in a bot token.
  *
  * Tokens never leave the Host. `/api/webot/status` reports each account with
  * `hasToken: true` instead of the token itself, so a page that is merely
@@ -15,13 +17,30 @@
  * @module dsh-webot
  */
 
+import path from 'node:path'
+
+import { createChannel } from './src/channel.js'
 import { createLoginTask } from './src/protocol/login.js'
-import { readState, stateFilePath, updateState } from './src/state.js'
+import { readState, stateDirectory, stateFilePath, updateState } from './src/state.js'
 
-/** The row needs the browser connection channel to serve the panel. */
-export const inject = ['connection']
+/**
+ * Services this row cannot work without. `connection` serves the panel;
+ * `sessionController` owns the sessions a WeChat conversation is mapped onto.
+ * Declaring both means the row stays inactive rather than half-working in a
+ * composition that lacks them.
+ */
+export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.2.0'
+const VERSION = '0.3.0'
+
+/**
+ * Fixed `cwd` for every session this channel creates.
+ *
+ * It must never vary per conversation: the Host matches an adopted session by
+ * `cwd`, and a mismatch makes that session permanently unreachable. Same rule,
+ * same reason, as `$DSH_HOME/dsh_orb`.
+ */
+const WORKSPACE_DIRECTORY = path.join(path.dirname(stateDirectory()), 'dsh_webot')
 
 /** Phases after which a login attempt will never change again. */
 const TERMINAL_PHASES = new Set(['confirmed', 'failed', 'cancelled', 'already-bound'])
@@ -29,48 +48,66 @@ const TERMINAL_PHASES = new Set(['confirmed', 'failed', 'cancelled', 'already-bo
 /** The one live login attempt, or null between attempts. */
 let loginTask = null
 
+/** The live channel, set for the lifetime of the row. */
+let channel = null
+
 /** The status document the panel renders. Never includes a token. */
 function readStatus() {
   const state = readState()
+  const live = channel ? channel.snapshot() : { polling: 0, accounts: [], errors: [] }
+  const pollingByAccount = new Map(live.accounts.map((entry) => [entry.accountId, entry]))
   const bound = state.accounts.length > 0
+  const polling = live.polling > 0
+
   return {
     ok: true,
     plugin: 'dsh-webot',
     version: VERSION,
-    milestone: 'M2',
+    milestone: 'M3',
     bound,
-    // No long poll exists until M3, so `connected` stays false and the panel
-    // reports "bound" instead of claiming a live link it does not have.
-    connected: false,
-    polling: false,
-    phase: bound ? 'bound' : 'idle',
-    accounts: state.accounts.map((account) => ({
-      accountId: account.accountId,
-      userId: account.userId,
-      baseUrl: account.baseUrl,
-      boundAt: account.boundAt,
-      hasToken: Boolean(account.token),
-    })),
-    errors: state.lastError ? [state.lastError.message] : [],
-    diagnostics: { statePath: stateFilePath() },
+    connected: bound && polling,
+    polling,
+    phase: bound ? (polling ? 'connected' : 'bound') : 'idle',
+    accounts: state.accounts.map((account) => {
+      const entry = pollingByAccount.get(account.accountId)
+      return {
+        accountId: account.accountId,
+        userId: account.userId,
+        baseUrl: account.baseUrl,
+        boundAt: account.boundAt,
+        hasToken: Boolean(account.token),
+        polling: Boolean(entry),
+        error: entry ? entry.error : null,
+      }
+    }),
+    errors: [...live.errors, ...(state.lastError ? [state.lastError.message] : [])],
+    diagnostics: {
+      statePath: stateFilePath(),
+      workspace: WORKSPACE_DIRECTORY,
+      sessions: live.activeSessions,
+      events: live.events || [],
+    },
     checkedAt: new Date().toISOString(),
   }
 }
 
-function createTask() {
+function createTask(getChannel) {
   return createLoginTask({
     onBound: async (account) => {
       const current = readState()
       const others = current.accounts.filter((entry) => entry.accountId !== account.accountId)
       updateState({ accounts: [account, ...others], lastError: null })
+      // Binding is only half the job: start listening immediately so the very
+      // first WeChat message after scanning is answered without a restart.
+      getChannel().startAccount(account)
     },
   })
 }
 
 /** Reuse a live attempt; replace one that already settled. */
-function taskForStart() {
+function taskForStart(getChannel) {
   if (loginTask && !TERMINAL_PHASES.has(loginTask.snapshot().phase)) return loginTask
-  loginTask = createTask()
+  loginTask = createTask(getChannel)
   return loginTask
 }
 
@@ -92,15 +129,52 @@ async function readCode(request) {
 }
 
 /**
- * Register every route for the plugin's lifetime.
+ * Register every route and start the channel for the plugin's lifetime.
  *
  * @param ctx - the plugin context.
  */
 export function apply(ctx) {
-  const register = (path, methods, fetch) =>
+  const liveChannel = createChannel({
+    sessionController: ctx.sessionController,
+    workspaceDirectory: WORKSPACE_DIRECTORY,
+  })
+  channel = liveChannel
+
+  const getChannel = () => liveChannel
+
+  // Assistant text for every session in this Host. Sessions this channel did not
+  // start are ignored inside the handler, which matches them by session id.
+  //
+  // `{ global: true }` is what lifts a host-scope listener onto an agent-scoped
+  // event; without it these frames are dispatched on the agent's own scope and
+  // never reach this context. The fallback keeps the row alive if a Cordis build
+  // rejects the options bag outright — the feature would then go quiet rather
+  // than take the whole plugin down.
+  const onStream = (payload) => liveChannel.handleAssistantStream(payload)
+  try {
+    ctx.on('agent/assistant-stream', onStream, { global: true })
+  } catch {
+    ctx.on('agent/assistant-stream', onStream)
+  }
+
+  ctx.effect(() => {
+    liveChannel.startAll()
+    return () => liveChannel.stopAll()
+  }, 'dsh-webot: wechat poll loops')
+
+  ctx.effect(
+    () => () => {
+      if (loginTask) loginTask.cancel()
+      loginTask = null
+      channel = null
+    },
+    'dsh-webot: stop everything on unload',
+  )
+
+  const register = (routePath, methods, fetch) =>
     ctx.effect(
-      () => ctx.connection.fetch.register({ path, methods, requestBody: 'buffered', fetch }),
-      `dsh-webot: ${path}`,
+      () => ctx.connection.fetch.register({ path: routePath, methods, requestBody: 'buffered', fetch }),
+      `dsh-webot: ${routePath}`,
     )
 
   register('/api/webot/status', ['GET'], () => {
@@ -113,7 +187,7 @@ export function apply(ctx) {
 
   register('/api/webot/login/start', ['POST'], async () => {
     try {
-      const task = taskForStart()
+      const task = taskForStart(getChannel)
       const login = await task.start()
       return json({ ok: true, login })
     } catch (error) {
@@ -150,12 +224,4 @@ export function apply(ctx) {
       return failure(error)
     }
   })
-
-  ctx.effect(
-    () => () => {
-      if (loginTask) loginTask.cancel()
-      loginTask = null
-    },
-    'dsh-webot: stop the login attempt on unload',
-  )
 }

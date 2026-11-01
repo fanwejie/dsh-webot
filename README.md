@@ -2,7 +2,7 @@
 
 WeChat channel for DeepSeek Harness — bind WeChat, then drive the agent on this machine from your phone.
 
-**Status: M2 (QR binding).** What works today:
+**Status: M3 (text both ways).** What works today:
 
 - a 「weBot设置」 action in the settings header, right of the shipped
   「打开配置文件」 (`open-document`, order 0) and left of Close;
@@ -10,10 +10,42 @@ WeChat channel for DeepSeek Harness — bind WeChat, then drive the agent on thi
 - the real Tencent iLink QR handshake: fetch QR, long-poll its status, pairing
   code, IDC redirect, automatic refresh on expiry, and the resulting binding
   persisted to disk;
-- `GET /api/webot/status` reporting the bound account (never its token).
+- the long poll that receives WeChat messages, one DSH session per WeChat
+  conversation, and the agent's answer sent back to the phone;
+- `GET /api/webot/status` reporting the bound account and its live state (never
+  its token), plus a ring buffer of what the channel recently did.
 
-Not built yet: the long poll that receives messages (M3), text both ways (M3),
-session commands (M4), approvals from the phone (M5), media (M6).
+Not built yet: session commands (M4), approvals from the phone (M5), media (M6).
+
+## How one message travels
+
+```
+WeChat ──► iLink getupdates (long poll, 35s)
+             │  message_type 1 only; duplicate message ids dropped
+             ▼
+        conversation key = accountId:userId
+             │  first message creates the DSH session, later ones reuse it
+             ▼
+        sessionController.prompt({ sessionId, content:[{type:'text'}] })
+             │
+             ▼
+        agent/assistant-stream ──► text-delta accumulated per session
+             │  flush only after the stream is quiet for 700ms
+             ▼
+        iLink sendmessage ──► the phone
+```
+
+Why the settle timer and not "send on `end`": an assistant turn is not one
+stream. Every model step opens its own attempt and emits its own `end` frame, so
+a turn that calls a tool produces several. Flushing on each `end` splits one
+answer into several WeChat messages; flushing on the `finish` chunk is worse,
+because that fires once per step too. A `start` arriving inside the quiet window
+cancels the flush — which is exactly the tool-call case.
+
+`cwd` for every session this channel creates is fixed at `$DSH_HOME/dsh_webot`.
+It must never vary per conversation: the Host matches an adopted session by
+`cwd`, and a mismatch makes that session permanently unreachable.
+
 
 ## Layout
 

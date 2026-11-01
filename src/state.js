@@ -71,9 +71,36 @@ export function normalizeState(raw) {
       if (accounts.length >= MAX_ACCOUNTS) break
     }
   }
+  // Long-poll cursors, keyed by account id. Losing one means the gateway replays
+  // or skips whatever was sent while it was missing.
+  const syncBufs = {}
+  if (source.syncBufs && typeof source.syncBufs === 'object') {
+    for (const [key, value] of Object.entries(source.syncBufs)) {
+      if (!key || typeof value !== 'string' || value.length > 16_384) continue
+      syncBufs[text(key, 128)] = value
+    }
+  }
+
+  // WeChat conversation -> DSH session, keyed by `${accountId}:${userId}`.
+  const bindings = {}
+  if (source.bindings && typeof source.bindings === 'object') {
+    for (const [key, value] of Object.entries(source.bindings)) {
+      if (!key || !value || typeof value !== 'object') continue
+      const sessionId = text(value.sessionId, 128)
+      if (!sessionId) continue
+      bindings[text(key, 256)] = {
+        sessionId,
+        cwd: text(value.cwd, 512),
+        createdAt: Number.isFinite(value.createdAt) ? Number(value.createdAt) : Date.now(),
+      }
+    }
+  }
+
   return {
     version: STATE_VERSION,
     accounts,
+    syncBufs,
+    bindings,
     lastError:
       source.lastError && typeof source.lastError === 'object'
         ? {

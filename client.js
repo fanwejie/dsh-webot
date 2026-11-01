@@ -417,10 +417,15 @@ window.__ModuleLoader__.load({
           h(
             'div',
             { style: { ...PANEL_CARD, display: 'flex', alignItems: 'center', gap: '8px' } },
-            h(StatusDot, { tone: 'var(--dsw-alias-state-success-primary)' }),
-            h('span', { style: { fontSize: '13px', lineHeight: '20px', fontWeight: 600 } }, t('status.bound')),
+            h(StatusDot, {
+              tone: status.data.connected
+                ? 'var(--dsw-alias-state-success-primary)'
+                : 'var(--dsw-alias-state-warn-primary)',
+            }),
+            h('span', { style: { fontSize: '13px', lineHeight: '20px', fontWeight: 600 } },
+              status.data.connected ? t('status.connected') : t('status.bound')),
             h('span', { style: { fontSize: '12px', lineHeight: '18px', color: 'var(--dsw-alias-label-secondary)' } },
-              t('status.boundNote')),
+              status.data.connected ? t('status.pollingNote') : t('status.boundNote')),
           ),
           h(
             'div',
@@ -428,6 +433,13 @@ window.__ModuleLoader__.load({
             field(t('account.id'), String(account.accountId || '—')),
             account.userId ? field(t('account.user'), String(account.userId)) : null,
             field(t('account.boundAt'), boundAt),
+            field(t('account.polling'), account.polling ? t('common.yes') : t('common.no')),
+            status.data.diagnostics && status.data.diagnostics.workspace
+              ? field(t('account.workspace'), String(status.data.diagnostics.workspace))
+              : null,
+            status.data.diagnostics && status.data.diagnostics.sessions !== undefined
+              ? field(t('account.sessions'), String(status.data.diagnostics.sessions))
+              : null,
             status.data.diagnostics && status.data.diagnostics.statePath
               ? field(t('status.field.stateFile'), String(status.data.diagnostics.statePath))
               : null,
@@ -704,12 +716,19 @@ window.__ModuleLoader__.load({
       'status.refresh': '刷新',
       'status.error': '读取状态失败：{reason}',
       'status.bound': '已绑定',
-      'status.boundNote': '长连接将在下一步启用',
+      'status.connected': '已连接',
+      'status.boundNote': '未在监听',
+      'status.pollingNote': '微信消息会送到这里',
       'status.unbound': '未绑定',
       'status.field.stateFile': '状态文件',
       'account.id': '机器人 ID',
       'account.user': '微信用户',
       'account.boundAt': '绑定时间',
+      'account.polling': '长连接',
+      'account.workspace': '会话目录',
+      'account.sessions': '活动会话',
+      'common.yes': '在线',
+      'common.no': '离线',
       'login.phase.idle': '准备中',
       'login.phase.starting': '正在获取二维码',
       'login.phase.waiting': '等待扫码',
@@ -734,7 +753,7 @@ window.__ModuleLoader__.load({
       'login.retry': '重试',
       'next.heading': '这一步做到了什么',
       'next.body':
-        'M2 接通了真实的腾讯 iLink 扫码握手：二维码、长轮询、配对码、换 IDC、二维码过期自动刷新，绑定结果写进状态文件，token 不出宿主进程。下一步（M3）才是让微信消息真正驱动 agent。',
+        'M3 打通了双向：后台为每个已绑定账号跑长轮询，微信消息落进这台电脑上的 DSH 会话，agent 的回答再送回微信。每个微信对话对应一个会话，目录固定在「会话目录」那一行。下一步（M4）才是 /new /list /switch 这些会话管理命令。',
       'footer.hint': '按 Esc 关闭',
     }
 
@@ -749,12 +768,19 @@ window.__ModuleLoader__.load({
       'status.refresh': 'Refresh',
       'status.error': 'Could not read status: {reason}',
       'status.bound': 'Bound',
-      'status.boundNote': 'The long poll lands in the next milestone',
+      'status.connected': 'Connected',
+      'status.boundNote': 'Not listening',
+      'status.pollingNote': 'WeChat messages land here',
       'status.unbound': 'Not bound',
       'status.field.stateFile': 'State file',
       'account.id': 'Bot ID',
       'account.user': 'WeChat user',
       'account.boundAt': 'Bound at',
+      'account.polling': 'Long poll',
+      'account.workspace': 'Session directory',
+      'account.sessions': 'Live sessions',
+      'common.yes': 'live',
+      'common.no': 'off',
       'login.phase.idle': 'Preparing',
       'login.phase.starting': 'Fetching the QR code',
       'login.phase.waiting': 'Waiting for a scan',
@@ -779,7 +805,7 @@ window.__ModuleLoader__.load({
       'login.retry': 'Retry',
       'next.heading': 'What this milestone proves',
       'next.body':
-        'M2 speaks the real Tencent iLink handshake: QR, long poll, pairing code, IDC redirect, automatic QR refresh on expiry, and the binding persisted to the state file with the token never leaving the Host. Making WeChat messages actually drive the agent is M3.',
+        'M3 closes the loop: a long poll runs per bound account, WeChat messages become DSH sessions on this machine, and the agent answer comes back as a WeChat reply. One session per WeChat conversation, with its directory shown above. Session commands (/new, /list, /switch) are M4.',
       'footer.hint': 'Press Esc to close',
     }
 
