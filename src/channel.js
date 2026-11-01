@@ -20,8 +20,10 @@
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
+import path from 'node:path'
 
 import { MESSAGE_TYPE_USER, getUpdates, sendText } from './protocol/messages.js'
+import { downloadMedia, extensionForName } from './protocol/media.js'
 import { appendEventLog, readState, updateState } from './state.js'
 
 /** Longest slice of one answer sent as a single WeChat message. */
@@ -57,8 +59,46 @@ function textOf(message) {
     if (item.type === 1 && item.text_item && typeof item.text_item.text === 'string') {
       return item.text_item.text
     }
+    // A voice note usually arrives with the service's own transcription; using it
+    // means voice works without any codec, just without word-level fidelity.
+    if (item.type === 3 && item.voice_item && typeof item.voice_item.text === 'string') {
+      return item.voice_item.text
+    }
   }
   return ''
+}
+
+/** Item types carried into a session, with the label used in the attached note. */
+const MEDIA_ITEM_LABELS = new Map([
+  [2, '图片'],
+  [3, '语音'],
+  [4, '文件'],
+  [5, '视频'],
+])
+
+/** How many media items one message may carry in. */
+const MAX_MEDIA_PER_MESSAGE = 3
+
+/** Media items of one inbound message, in arrival order. */
+function mediaItemsOf(message) {
+  const items = Array.isArray(message.item_list) ? message.item_list : []
+  return items.filter((item) => item && MEDIA_ITEM_LABELS.has(item.type))
+}
+
+/** The per-type payload object of one media item. */
+function mediaPayload(item) {
+  switch (item.type) {
+    case 2:
+      return item.image_item
+    case 3:
+      return item.voice_item
+    case 4:
+      return item.file_item
+    case 5:
+      return item.video_item
+    default:
+      return undefined
+  }
 }
 
 /** Split one answer into WeChat-sized pieces, preferring newline boundaries. */
@@ -329,6 +369,52 @@ export function createChannel(options) {
     }
   }
 
+  /**
+   * Save one inbound media item into the session's workspace.
+   *
+   * The file lands under `media/inbound/` inside the session `cwd`, which is the
+   * agent's working directory — so it can open it with its own tools. The prompt
+   * carries the relative path; the bytes are not embedded as an attachment
+   * block, which would need the Host attachment service and is a separate step.
+   */
+  async function saveInboundMedia(item, cwd) {
+    const payload = mediaPayload(item)
+    const media = payload && payload.media
+    if (!media || (!media.encrypt_query_param && !media.full_url)) return ''
+
+    const label = MEDIA_ITEM_LABELS.get(item.type) || '附件'
+    // An image's `aeskey` is the raw key in hex; `media.aes_key` is base64 of the
+    // hex text. Normalising to the first shape lets one parser handle both.
+    const aesKeyBase64 = payload.aeskey
+      ? Buffer.from(String(payload.aeskey), 'hex').toString('base64')
+      : media.aes_key
+
+    const buffer = await downloadMedia({
+      encryptQueryParam: media.encrypt_query_param,
+      aesKeyBase64,
+      fullUrl: media.full_url,
+      label,
+    })
+
+    const original = typeof payload.file_name === 'string' ? payload.file_name : ''
+    const extension = extensionForName(
+      original,
+      item.type === 2 ? 'jpg' : item.type === 5 ? 'mp4' : item.type === 3 ? 'silk' : 'bin',
+    )
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const safeOriginal = original.replace(/[\\/:*?"<>|]/g, '_').slice(-60)
+    const fileName = safeOriginal ? `${stamp}-${safeOriginal}` : `${stamp}.${extension}`
+
+    const directory = path.join(cwd, 'media', 'inbound')
+    fs.mkdirSync(directory, { recursive: true })
+    const target = path.join(directory, fileName)
+    fs.writeFileSync(target, buffer)
+
+    const relative = path.relative(cwd, target).split(path.sep).join('/')
+    note('media', `${label} | ${buffer.length} bytes | ${relative}`)
+    return `[微信${label}] 已保存到 ${relative}（${buffer.length} 字节）`
+  }
+
   async function handleInbound(account, message, signal) {
     if (!message || typeof message !== 'object') return
     // BOT-typed entries are our own sends echoed back by the gateway.
@@ -338,11 +424,14 @@ export function createChannel(options) {
     if (!userId) return
 
     const text = textOf(message).trim()
-    if (!text) return
+    const mediaItems = mediaItemsOf(message)
+    // A message may be media only, so text alone no longer decides whether there
+    // is anything to deliver.
+    if (!text && mediaItems.length === 0) return
 
     const messageId = String(message.message_id || '')
     if (remember(messageId)) return
-    note('inbound', `${userId} · ${text.length} chars`)
+    note('inbound', `${userId} · ${text.length} chars · ${mediaItems.length} media`)
 
     // A reply to a permission prompt is consumed here. The agent turn is blocked
     // waiting for exactly this decision, so forwarding the text would queue it
@@ -390,12 +479,35 @@ export function createChannel(options) {
     })
     note('session', sessionId)
 
+    const bindingCwd =
+      readState().bindings[`${account.accountId}:${userId}`]?.cwd || workspaceDirectory
+    const mediaNotes = []
+    for (const item of mediaItems.slice(0, MAX_MEDIA_PER_MESSAGE)) {
+      try {
+        const saved = await saveInboundMedia(item, bindingCwd)
+        if (saved) mediaNotes.push(saved)
+      } catch (error) {
+        note('media', `failed | ${String((error && error.message) || error)}`)
+      }
+    }
+
+    const body = [text, ...mediaNotes].filter((part) => part).join('\n\n')
+    if (!body) {
+      await sendReply(
+        account.accountId,
+        userId,
+        String(message.context_token || ''),
+        '媒体下载失败，这次没送进会话。',
+      )
+      return
+    }
+
     await sessionController.prompt(
       {
         requestId: `webot-${crypto.randomUUID()}`,
         sessionId,
         mode: 'queue',
-        content: [{ type: 'text', text }],
+        content: [{ type: 'text', text: body }],
       },
       signal,
     )

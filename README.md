@@ -144,9 +144,33 @@ side look broken — from that side the prompt genuinely is missing, because a
 waterfall has exactly one winner. `both` is the only mode where neither side can
 report a prompt as lost.
 
-One consequence of `both`: if the desk answers first, the WeChat message stays on
-the phone unanswered, and a later `1` is no longer a pending decision — it reaches
-the agent as ordinary text. That is the price of racing.
+## Media
+
+Inbound works: an image, file, video or voice note is downloaded from the CDN,
+AES-128-ECB decrypted, and saved under `media/inbound/` inside the session's
+workspace. The prompt then carries the relative path:
+
+```
+[微信图片] 已保存到 media/inbound/2026-11-01T09-12-33-123Z.jpg（184320 字节）
+```
+
+Because the file lands inside the agent's `cwd`, it can open it with its own tools
+— `read_image` for pictures, the ordinary file tools for documents — so no
+attachment plumbing is needed. What it does *not* do is embed the bytes as an
+image block in the prompt; that needs the Host attachment service and is a
+separate step.
+
+The AES key has **two encodings**, and this is the part that is easy to get wrong:
+`media.aes_key` for files, voice and video is `base64(hex text)`, while an image's
+`image_item.aeskey` is the raw key in hex. Base64-decoding and using the result
+directly yields a 32-byte key for the first shape — garbage rather than an error.
+`parseAesKey` decides by decoded length, not by which field it came from.
+
+Voice notes use the service's own transcription when the item carries one, so
+voice works without a codec (word-level fidelity is whatever Tencent provides).
+
+Not built yet: outbound media — the agent sending a file back. That needs the CDN
+upload path and a tool to invoke it.
 
 ## Layout
 
