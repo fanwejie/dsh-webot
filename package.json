@@ -19,11 +19,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/OWNER/dsh-webot.git"
+    "url": "git+https://github.com/fanwejie/dsh-webot.git"
   },
-  "homepage": "https://github.com/OWNER/dsh-webot#readme",
+  "homepage": "https://github.com/fanwejie/dsh-webot#readme",
   "bugs": {
-    "url": "https://github.com/OWNER/dsh-webot/issues"
+    "url": "https://github.com/fanwejie/dsh-webot/issues"
   },
   "exports": {
     ".": "./index.js",

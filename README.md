@@ -29,7 +29,7 @@
 **1. 把仓库放到一个固定的位置**
 
 ```bash
-git clone https://github.com/OWNER/dsh-webot.git
+git clone https://github.com/fanwejie/dsh-webot.git
 ```
 
 放在哪都行，但**别放在临时目录**——DSH 是链接这个目录的，删了插件就没了。
