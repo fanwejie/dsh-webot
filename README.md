@@ -170,6 +170,12 @@ misses it reaches nobody and reports no error — the one failure here with no
 recovery. Saving those 48 characters would trade a rounding error of tokens for
 silent lost messages.
 
+**Both strings are editable**, in the panel's 提示词 group: 每轮都追发的提醒 is the
+anchor (capped at 300 characters, because it is paid on every message) and 场合提示词
+is the note above. Each has its own 恢复默认. Clearing the anchor turns it off — the
+field says so, because that is the one edit here that can quietly reintroduce silent
+non-replies.
+
 The full note is re-sent on two triggers: the turn count (a long working session,
 where the note drifts far back in the context) and an edit (the user just changed it
 and expects it applied now). A restart empties the tracker in memory, so the next

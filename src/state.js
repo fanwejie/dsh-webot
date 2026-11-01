@@ -25,7 +25,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { DEFAULT_CHANNEL_PROMPT, MAX_PROMPT_CHARS } from './persona.js'
+import { ANCHOR_REMINDER, DEFAULT_CHANNEL_PROMPT, MAX_ANCHOR_CHARS, MAX_PROMPT_CHARS } from './persona.js'
 
 const STATE_VERSION = 1
 const MAX_ACCOUNTS = 5
@@ -100,6 +100,14 @@ function clampTimeout(value) {
 /** Trim and cap one prompt layer. An empty string stays empty — that means "off". */
 function clampPrompt(value) {
   return typeof value === 'string' ? value.trim().slice(0, MAX_PROMPT_CHARS) : ''
+}
+
+/**
+ * The anchor gets its own cap: it is appended on every turn, not every N turns, so
+ * a long one is a permanent tax rather than an occasional one.
+ */
+function clampAnchor(value) {
+  return typeof value === 'string' ? value.trim().slice(0, MAX_ANCHOR_CHARS) : ''
 }
 
 /** Directory that owns the state file. */
@@ -223,6 +231,12 @@ export function normalizeState(raw) {
       source.channelPrompt === undefined
         ? DEFAULT_CHANNEL_PROMPT
         : clampPrompt(source.channelPrompt),
+    // The one-liner appended on every turn. Same undefined/'' distinction, and a
+    // much smaller cap because it is paid on every message rather than every N.
+    anchorPrompt:
+      source.anchorPrompt === undefined
+        ? ANCHOR_REMINDER
+        : clampAnchor(source.anchorPrompt),
     lastError:
       source.lastError && typeof source.lastError === 'object'
         ? {

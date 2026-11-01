@@ -970,10 +970,13 @@ export function createChannel(options) {
     const key = `${accountId}:${userId}`
     const mark = promptMarks.get(key)
     const turns = state.promptRefreshTurns || 20
+    // Editable, and empty means "off": that is the user's call to make, but the hint
+    // in the panel says what turning it off costs.
+    const anchor = state.anchorPrompt === undefined ? ANCHOR_REMINDER : state.anchorPrompt
 
     if (!promptText) {
       promptMarks.set(key, { turns: 0, text: '' })
-      return ANCHOR_REMINDER
+      return anchor
     }
 
     const due = !mark || mark.text !== promptText || mark.turns >= turns
@@ -987,8 +990,8 @@ export function createChannel(options) {
     }
 
     promptMarks.set(key, { turns: mark.turns + 1, text: mark.text })
-    note('prompt', `anchor | ${mark.turns + 1}/${turns} turns`)
-    return ANCHOR_REMINDER
+    note('prompt', `anchor | ${anchor.length} chars | ${mark.turns + 1}/${turns} turns`)
+    return anchor
   }
 
   /** Hold a file (and any text that came with it) until the window closes. */

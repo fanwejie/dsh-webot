@@ -20,7 +20,12 @@
 import path from 'node:path'
 
 import { createChannel } from './src/channel.js'
-import { DEFAULT_CHANNEL_PROMPT, MAX_PROMPT_CHARS } from './src/persona.js'
+import {
+  ANCHOR_REMINDER,
+  DEFAULT_CHANNEL_PROMPT,
+  MAX_ANCHOR_CHARS,
+  MAX_PROMPT_CHARS,
+} from './src/persona.js'
 import { createLoginTask } from './src/protocol/login.js'
 import { readState, stateDirectory, stateFilePath, updateState } from './src/state.js'
 
@@ -32,7 +37,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.24.2'
+const VERSION = '0.25.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -131,10 +136,12 @@ function readStatus() {
     mediaMaxPerMessage: state.mediaMaxPerMessage,
     maxListRows: state.maxListRows,
     channelPrompt: state.channelPrompt,
+    anchorPrompt: state.anchorPrompt,
     // Shipped default, so the panel can offer "restore" without a second route.
     // Without this, a saved prompt would keep overriding an improved default
     // forever, and the only way back would be retyping it by hand.
     defaultChannelPrompt: DEFAULT_CHANNEL_PROMPT,
+    defaultAnchorPrompt: ANCHOR_REMINDER,
     diagnostics: {
       statePath: stateFilePath(),
       workspace: WORKSPACE_DIRECTORY,
@@ -552,6 +559,13 @@ export function apply(ctx) {
         patch.mediaMergeSec = Math.round(seconds)
       }
 
+      if (payload && typeof payload.anchorPrompt === 'string') {
+        if (payload.anchorPrompt.length > MAX_ANCHOR_CHARS) {
+          return json({ ok: false, error: `anchorPrompt 超过 ${MAX_ANCHOR_CHARS} 字` }, 400)
+        }
+        patch.anchorPrompt = payload.anchorPrompt
+      }
+
       // The prompt is free text. An empty string is stored as-is and means "off" —
       // it is not silently replaced by the default, or the field could never be
       // cleared.
@@ -580,6 +594,7 @@ export function apply(ctx) {
         mediaMaxPerMessage: next.mediaMaxPerMessage,
         maxListRows: next.maxListRows,
         channelPrompt: next.channelPrompt,
+        anchorPrompt: next.anchorPrompt,
       })
     } catch (error) {
       return failure(error)

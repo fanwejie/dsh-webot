@@ -671,19 +671,29 @@ window.__ModuleLoader__.load({
           .catch((error) => setBindError((error && error.message) || String(error)))
       }
 
-      /** Draft for the prompt layer: null means "showing the saved value". */
+      /**
+       * Drafts for the two prompt strings: null means "showing the saved value".
+       *
+       * They save together because they are one surface — the note and the one-liner
+       * that rides in front of it — and a half-saved pair is a confusing state.
+       */
       const [draftChannel, setDraftChannel] = React.useState(null)
+      const [draftAnchor, setDraftAnchor] = React.useState(null)
 
       function savePrompts() {
-        if (draftChannel === null) return
+        const patch = {}
+        if (draftChannel !== null) patch.channelPrompt = draftChannel
+        if (draftAnchor !== null) patch.anchorPrompt = draftAnchor
+        if (Object.keys(patch).length === 0) return
         setBindError('')
-        post(SETTINGS_URL, { channelPrompt: draftChannel })
+        post(SETTINGS_URL, patch)
           .then((body) => {
             if (!body || body.ok !== true) {
               setBindError((body && body.error) || t('bind.failed'))
               return
             }
             setDraftChannel(null)
+            setDraftAnchor(null)
             refreshStatus()
           })
           .catch((error) => setBindError((error && error.message) || String(error)))
@@ -1003,6 +1013,21 @@ window.__ModuleLoader__.load({
               fallback: 20,
               onCommit: (value) => postSettings({ promptRefreshTurns: value }),
             }),
+            h(
+              'p',
+              { style: { ...MUTED, marginTop: '10px' } },
+              t('persona.anchorLabel'),
+              h(Hint, { t, text: t('persona.anchorHint') }),
+            ),
+            h('textarea', {
+              value: draftAnchor === null ? String(status.data.anchorPrompt || '') : draftAnchor,
+              onChange: (event) => setDraftAnchor(event.target.value),
+              // Two rows: this string goes out on every turn, so it is meant to stay
+              // short — a tall box would invite it to grow.
+              rows: 2,
+              'aria-label': t('persona.anchorLabel'),
+              style: TEXTAREA,
+            }),
             h('p', { style: { ...MUTED, marginTop: '10px' } }, t('persona.channelLabel')),
             h('textarea', {
               value: draftChannel === null ? String(status.data.channelPrompt || '') : draftChannel,
@@ -1015,12 +1040,16 @@ window.__ModuleLoader__.load({
             }),
             h(
               'div',
-              { style: { marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center' } },
+              { style: { marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
               h(Btn, {
                 label: t('persona.save'),
                 onClick: savePrompts,
                 variant: 'primary',
-                disabled: draftChannel === null,
+                disabled: draftChannel === null && draftAnchor === null,
+              }),
+              h(Btn, {
+                label: t('persona.restoreAnchor'),
+                onClick: () => setDraftAnchor(String(status.data.defaultAnchorPrompt || '')),
               }),
               h(Btn, {
                 label: t('persona.restore'),
@@ -1396,7 +1425,11 @@ window.__ModuleLoader__.load({
         + '需要读 Windows 的鼠标位置，所以每次判定会起一个 PowerShell 进程，跑满整个窗口。',
       'promptRefresh.hint': '完整提示词不再每条都发；平时只带一句"必须调工具"的提醒。改提示词后会自动重发一次。',
       'persona.heading': '提示词',
-      'persona.channelLabel': '场合提示词（每条消息都会追加）',
+      'persona.anchorLabel': '每轮都追发的提醒',
+      'persona.anchorHint':
+        '这条每轮都会追加，不按轮次省。它只干一件事：提醒 agent 必须调用 send_to_wechat，否则你收不到消息。可以改措辞，但清空就等于关掉——关掉之后它忘调工具时不会有任何提示。',
+      'persona.restoreAnchor': '恢复提醒默认',
+      'persona.channelLabel': '场合提示词（按轮次重发）',
       'persona.save': '保存提示词',
       'persona.restore': '恢复默认',
       'persona.hint': '追加在消息末尾；保存后下一条消息生效，不用重启。',
@@ -1521,7 +1554,11 @@ window.__ModuleLoader__.load({
       'promptRefresh.hint':
         'The full prompt is no longer sent every message; a one-line tool reminder goes out each turn. Editing the prompt triggers a resend.',
       'persona.heading': 'Prompt',
-      'persona.channelLabel': 'Channel prompt (appended to every message)',
+      'persona.anchorLabel': 'Reminder sent every turn',
+      'persona.anchorHint':
+        'This one is appended on every turn, never skipped. It does exactly one job: remind the agent that it must call send_to_wechat or you receive nothing. Change the wording freely, but clearing it turns it off - and then a forgotten tool call is silent.',
+      'persona.restoreAnchor': 'Restore reminder',
+      'persona.channelLabel': 'Channel prompt (re-sent on a schedule)',
       'persona.save': 'Save prompt',
       'persona.restore': 'Restore default',
       'persona.hint': 'Appended after the message; saving is enough, the next turn uses it.',

@@ -34,10 +34,18 @@
 export const MAX_PROMPT_CHARS = 8000
 
 /**
+ * Cap for the anchor. It goes out on every turn, so it is the one string in this
+ * file whose length is paid on every single message.
+ */
+export const MAX_ANCHOR_CHARS = 300
+
+/**
  * Always appended, even when the full note is not due.
  *
  * This is the whole of "did the turn reply": tool-only mode sends nothing on its
- * own, so a turn that forgets this call reaches nobody and reports no error.
+ * own, so a turn that forgets this call reaches nobody and reports no error. It is
+ * the default text of a setting, because the wording is a matter of taste while the
+ * rule itself is not.
  */
 export const ANCHOR_REMINDER =
   '【必须】这轮回复要用 send_to_wechat 的 text 发出去，否则他收不到任何消息。'
