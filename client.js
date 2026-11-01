@@ -911,13 +911,11 @@ window.__ModuleLoader__.load({
               'aria-label': t('done.label'),
               style: { width: '14px', height: '14px', margin: 0, accentColor: 'var(--dsw-alias-brand-primary)' },
             }),
-            h('span', { style: { ...MUTED, margin: 0 } }, t('done.unit')),
           ),
           h(NumberField, {
             t,
             label: t('done.delay'),
             hint: t('done.delayHint'),
-            unit: t('done.delayUnit'),
             value: status.data.doneNotifyDelaySec,
             min: 5,
             max: 600,
@@ -1321,17 +1319,16 @@ window.__ModuleLoader__.load({
       'promptRefresh.label': '提示词重发',
       'promptRefresh.unit': '轮完整发一次',
       'done.label': '任务完成提醒',
-      'done.unit': '打开后：别的会话跑完，你',
       'done.delay': '等待秒数',
-      'done.delayUnit': '秒内鼠标动得不多，就发微信告诉你',
-      'done.delayHint': '任务结束后盯这么久再决定要不要提醒你。',
+      'done.delayHint':
+        '任务结束后先盯这么久，再决定要不要提醒你。窗口内鼠标累计移动超过下面的阈值、或者一直在敲键盘，就认为你在电脑前，不发。',
       'done.travelLabel': '鼠标阈值',
       'done.travelUnit': 'px（累计移动超过它就算你在电脑前）',
       'done.travelHint':
         '判定"人在电脑前"需要鼠标累计移动多少像素。默认 120px 约等于 4 个光标的长度：桌子震动、手碰一下鼠标远达不到，所以不会取消提醒；你真的去动鼠标，一下就会超过。',
       'done.hint':
-        '只提醒别的会话（微信自己的会话不提醒，它本来就会回你）。'
-        + '判定方式：任务结束后连续采样鼠标位置，累计移动小于上面的阈值就当人不在，发一条"[系统提示] 工作区 · 会话 · DSH 已跑完"到微信；超过阈值、或期间一直在敲键盘，就认为你在电脑前，不打扰你。'
+        '打开后：别的会话跑完，如果在"等待秒数"内鼠标没怎么动，就发一条"[系统提示] 工作区 · 会话 · DSH 已跑完"到微信。'
+        + '只提醒别的会话（微信自己的会话不提醒，它本来就会回你）。'
         + '这条消息由通道直接发出，不经过 AI。'
         + '需要读 Windows 的鼠标位置，所以每次判定会起一个 PowerShell 进程，跑满整个窗口。',
       'promptRefresh.hint': '完整提示词不再每条都发；平时只带一句"必须调工具"的提醒。改提示词后会自动重发一次。',
@@ -1442,16 +1439,17 @@ window.__ModuleLoader__.load({
       'promptRefresh.label': 'Prompt refresh',
       'promptRefresh.unit': 'turns between full resends',
       'done.label': 'Task finished',
-      'done.unit': 'Notify me when another session finishes, if the pointer moves less than',
       'done.delay': 'Wait seconds',
-      'done.delayUnit': 'seconds, watching how far the pointer travels',
-      'done.delayHint': 'How long to watch the desk before deciding whether to notify.',
+      'done.delayHint':
+        'How long to watch the desk before deciding whether to notify. More pointer travel than the threshold below, or steady typing, during that window means you are there and nothing is sent.',
       'done.travelLabel': 'Pointer threshold',
       'done.travelUnit': 'px (more travel than this means you are there)',
       'done.travelHint':
         'How far the pointer must travel in total to count as "somebody is here". The default 120 px is about four pointer widths: a bumped desk or a hand brushing the mouse is nowhere near it, so the reminder survives; reaching for the mouse clears it immediately.',
       'done.hint':
-        'Only sessions other than the WeChat one (that one already answers you). After a task ends the pointer is sampled: total travel below the threshold means nobody is sitting there, so it sends "[系统提示] workspace · session · DSH 已跑完" straight to WeChat, without the AI. More travel than that, or steady typing, means you are at the desk and it stays quiet. '
+        'When on: if another session finishes and the pointer stays under the threshold for the wait window, one line goes to WeChat - "[系统提示] workspace · session · DSH 已跑完". '
+        + 'Only sessions other than the WeChat one (that one already answers you). '
+        + 'The message is sent by the channel, without the AI. '
         + 'Reading the pointer needs one PowerShell process per decision, alive for the whole window.',
       'promptRefresh.hint':
         'The full prompt is no longer sent every message; a one-line tool reminder goes out each turn. Editing the prompt triggers a resend.',
