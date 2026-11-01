@@ -624,6 +624,30 @@ window.__ModuleLoader__.load({
       const triggerRef = React.useRef(null)
       const selected = items.find((item) => item.id === valueId) || items[0]
 
+      // One stylesheet for every dropdown on the page. Injected when the component
+      // first mounts rather than at module scope, so the factory stays free of DOM
+      // side effects until something actually renders.
+      React.useEffect(() => {
+        if (typeof document === 'undefined') return
+        if (document.getElementById('webot-dropdown-style')) return
+        const style = document.createElement('style')
+        style.id = 'webot-dropdown-style'
+        style.textContent = [
+          '@keyframes webot-dropdown-in {',
+          '  from { opacity: 0; transform: scaleY(0.85) translateY(-4px); }',
+          '  to   { opacity: 1; transform: scaleY(1) translateY(0); }',
+          '}',
+          '.webot-dropdown-in {',
+          // Slow on purpose: the list is growing out of the control, not snapping.
+          '  animation: webot-dropdown-in 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;',
+          '}',
+          '@media (prefers-reduced-motion: reduce) {',
+          '  .webot-dropdown-in { animation: none; }',
+          '}',
+        ].join('\n')
+        document.head.appendChild(style)
+      }, [])
+
       const close = () => {
         setOpen(false)
         setBox(null)
@@ -653,6 +677,9 @@ window.__ModuleLoader__.load({
           maxHeight: Math.min(260, Math.max(96, available - 4)),
           top: flip ? undefined : rect.bottom + 4,
           bottom: flip ? window.innerHeight - rect.top + 4 : undefined,
+          // The animation grows the list away from the trigger, so its origin is the
+          // edge that touches it.
+          origin: flip ? 'bottom center' : 'top center',
         })
         setOpen(true)
       }
@@ -709,6 +736,7 @@ window.__ModuleLoader__.load({
               'div',
               {
                 role: 'listbox',
+                className: 'webot-dropdown-in',
                 style: {
                   position: 'fixed',
                   left: box.left + 'px',
@@ -723,6 +751,8 @@ window.__ModuleLoader__.load({
                   border: '1px solid var(--dsw-alias-border-l2)',
                   background: 'var(--dsw-alias-bg-base)',
                   boxShadow: 'var(--dsw-elevation-prominent)',
+                  // Grows away from the control it belongs to.
+                  transformOrigin: box.origin,
                 },
               },
               items.map((item) => {
