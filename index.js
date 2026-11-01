@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.11.0'
+const VERSION = '0.12.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -122,7 +122,6 @@ function readStatus() {
     binding: readBinding(state),
     approvalMode: state.approvalMode || 'phone',
     approvalTimeoutSec: state.approvalTimeoutSec || 30,
-    personaMode: state.personaMode || 'chat',
     channelPrompt: state.channelPrompt,
     personaPrompt: state.personaPrompt,
     diagnostics: {
@@ -467,13 +466,6 @@ export function apply(ctx) {
         patch.approvalTimeoutSec = Math.round(seconds)
       }
 
-      if (payload && typeof payload.personaMode === 'string') {
-        if (!['chat', 'work'].includes(payload.personaMode)) {
-          return json({ ok: false, error: 'personaMode 只能是 chat / work' }, 400)
-        }
-        patch.personaMode = payload.personaMode
-      }
-
       // Both prompt layers are free text. An empty string is stored as-is and
       // means "off" — it is not silently replaced by the default, or the field
       // could never be cleared.
@@ -495,7 +487,6 @@ export function apply(ctx) {
         ok: true,
         approvalMode: next.approvalMode,
         approvalTimeoutSec: next.approvalTimeoutSec,
-        personaMode: next.personaMode,
         channelPrompt: next.channelPrompt,
         personaPrompt: next.personaPrompt,
       })

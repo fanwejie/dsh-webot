@@ -62,19 +62,23 @@ M4 fixes it in two ways:
   conversation to any of them — including one you already had — or detaches it,
   so the next message starts a fresh session inside the workspace.
 
-## Prompts and register
+## Prompts and persona
 
-Two prompt layers, **appended after the user's message**, both editable in the
-panel (and switched by command):
+Two prompt layers, **both appended after the user's message, on every turn** and
+both editable in the panel:
 
-| Layer | Appended in | Purpose |
-| --- | --- | --- |
-| 场合提示词 `channelPrompt` | chat **and** work | Where the model is talking: a phone, no screen, no file access, send files with `send_to_wechat`, keep it short |
-| 人设提示词 `personaPrompt` | chat only | Who is speaking: tone, attitude, the one rule that tone must not cost the user information |
+| Layer | Purpose |
+| --- | --- |
+| 场合提示词 `channelPrompt` | Where the model is talking: a phone, no screen, no file access, send files with `send_to_wechat`, keep it short |
+| 人设提示词 `personaPrompt` | Who is speaking: tone, attitude, and the rule that tone must not cost the user information |
 
-`/chat` and `/work` switch the register; 说话模式 in the panel writes the same
-state. There is no `/role` any more — the persona is a text field, not a file
-catalogue.
+**There is no chat/work switch.** An earlier version had one, and it was cut: the
+same conversation is the same person, and a register the user has to remember to
+flip makes half the answers arrive in the wrong voice. The persona text carries the
+rule instead — `闲聊就好好聊，让你干活就先把事办好再贫，不用谁提醒你切换` — and the
+model decides from what was actually said.
+
+There is no `/role` either: the persona is a text field, not a file catalogue.
 
 ### Why it is shaped this way
 

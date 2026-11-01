@@ -179,7 +179,7 @@ function splitBubbles(text) {
 }
 
 /** Commands handled by the channel itself; anything else reaches the agent. */
-const KNOWN_COMMANDS = new Set(['help', 'list', 'switch', 'new', 'current', 'cancel', 'chat', 'work'])
+const KNOWN_COMMANDS = new Set(['help', 'list', 'switch', 'new', 'current', 'cancel'])
 
 /** Rows one `/list` screen shows. */
 const MAX_LIST_ROWS = 10
@@ -244,9 +244,6 @@ const HELP_TEXT = [
   '/new 标题 — 新建会话并切过去',
   '/current — 当前会话',
   '/cancel — 停止正在跑的任务',
-  '',
-  '/chat — 聊天模式（带人设，默认）',
-  '/work — 干活模式（不套人设）',
   '/help — 这份说明',
   '',
   '其它任何内容都会直接发给当前会话的 agent。',
@@ -424,8 +421,8 @@ export function createChannel(options) {
 
     // Only agent answers are bubbled. Command receipts (help, listings) must stay
     // one message — splitting `/help` into ten bubbles is worse than a wall of
-    // text — and work mode deliberately answers in one piece.
-    const bubble = options.bubbles === true && readState().personaMode !== 'work'
+    // text.
+    const bubble = options.bubbles === true
     const parts = bubble ? splitBubbles(text) : splitReply(text)
     const list = parts.length > 0 ? parts : [String(text || '')]
 
@@ -655,7 +652,6 @@ export function createChannel(options) {
     // point where the model starts writing.
     const state = readState()
     const tail = composeTail({
-      mode: state.personaMode,
       channelPrompt: state.channelPrompt,
       personaPrompt: state.personaPrompt,
     })
@@ -1007,16 +1003,6 @@ export function createChannel(options) {
       })
       const title = found ? readTitle(found) : ''
       return reply(`已切换到 ${shortId(sessionId)}${title ? '：' + title : ''}`)
-    }
-
-    if (command.name === 'chat') {
-      updateState({ personaMode: 'chat' })
-      return reply('切回聊天模式了。')
-    }
-
-    if (command.name === 'work') {
-      updateState({ personaMode: 'work' })
-      return reply('切到干活模式：不套人设，直接说事。要聊天就发 /chat。')
     }
 
     return reply(HELP_TEXT)

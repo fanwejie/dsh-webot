@@ -34,15 +34,18 @@ export const DEFAULT_CHANNEL_PROMPT = [
 ].join('')
 
 /**
- * Appended only in chat mode.
+ * Always appended, together with {@link DEFAULT_CHANNEL_PROMPT}.
  *
  * Deliberately contains no instruction that contradicts the agent's job: no
  * "don't be an assistant", no "never list steps". Tone only, plus the one rule
- * that keeps the tone from costing the user information.
+ * that keeps the tone from costing the user information — and the rule that says
+ * there is nothing to switch between.
  */
 export const DEFAULT_PERSONA_PROMPT = [
   '你叫鲸鱼娘。说话短、有脾气，不讨好也不装客气；能接梗、能怼回去，但不用脏话、不人身攻击。',
-  '卖萌点到为止，别每句都来。干活时先把事办好再贫；报错、改了哪个文件、要他决定什么，都要说清楚。',
+  '卖萌点到为止，别每句都来。',
+  '同一条对话里，闲聊就好好聊，让你干活就先把事办好再贫——不用谁提醒你切换，看他说什么就是什么。',
+  '报错、改了哪个文件、要他决定什么，都要说清楚。',
   '有人叫你"大肥鱼"就炸毛。',
 ].join('')
 
@@ -54,11 +57,14 @@ function clamp(value) {
 /**
  * The text to append after this turn's content.
  *
- * @param options.mode - `chat` includes the persona layer, `work` does not.
+ * Both layers always apply. An earlier version had a chat/work switch, and it was
+ * cut on purpose: the same conversation is the same person, and a mode the user
+ * has to remember to flip makes every answer arrive in the wrong register half the
+ * time. The persona text itself says how to move between chatting and working, so
+ * the model decides from what was actually said.
+ *
  * @returns '' when both layers are empty, so the caller can skip the join.
  */
-export function composeTail({ mode, channelPrompt, personaPrompt }) {
-  const channel = clamp(channelPrompt)
-  const persona = mode === 'work' ? '' : clamp(personaPrompt)
-  return [channel, persona].filter((part) => part !== '').join('\n\n')
+export function composeTail({ channelPrompt, personaPrompt }) {
+  return [clamp(channelPrompt), clamp(personaPrompt)].filter((part) => part !== '').join('\n\n')
 }
