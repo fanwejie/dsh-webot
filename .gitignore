@@ -1,0 +1,10 @@
+# Local scratch output — extracted DSH bundles, logs, ad-hoc probes.
+.scratch/
+
+# Dependencies and build output, when this package grows a build step.
+node_modules/
+dist/
+
+# Editor / OS noise.
+.DS_Store
+Thumbs.db

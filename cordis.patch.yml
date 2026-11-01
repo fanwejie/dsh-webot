@@ -1,0 +1,14 @@
+# weBot — WeChat channel for DeepSeek Harness.
+#
+# One Host row. The package.json `dsh.client` declaration makes the web app load
+# ./client as the browser half, which owns the 「weBot设置」 button in the settings
+# header and the full-screen panel it opens.
+#
+# Row id matches the package name: package name, this row id, and the Client
+# module id in client.js must stay equal.
+#
+# M1 skeleton: the row carries no config yet. Later milestones add `autoStart`
+# and the binding settings, which are edited from the panel rather than here.
+- insert:
+    - id: dsh-webot
+      name: dsh-webot
