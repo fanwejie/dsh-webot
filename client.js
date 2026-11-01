@@ -552,7 +552,14 @@ window.__ModuleLoader__.load({
       // 1. Channel status.
       React.useEffect(() => {
         let cancelled = false
-        setStatus({ phase: 'loading' })
+        // Keep the current panel mounted while refreshing.
+        //
+        // Blanking to `loading` first replaced the whole body with one short line,
+        // which collapsed the scroll height and let the browser clamp the position
+        // to 0 — so every save jumped the panel back to the top. The data is stale
+        // for a moment either way; a stale field is better than a lost scroll
+        // position.
+        setStatus((previous) => (previous.phase === 'ready' ? previous : { phase: 'loading' }))
         fetch(STATUS_URL, { credentials: 'same-origin' })
           .then((response) =>
             response.ok ? response.json() : Promise.reject(new Error('HTTP ' + response.status)),
