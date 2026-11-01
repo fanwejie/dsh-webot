@@ -501,24 +501,19 @@ window.__ModuleLoader__.load({
           .catch((error) => setBindError((error && error.message) || String(error)))
       }
 
-      /** Drafts for the two prompt layers: null means "showing the saved value". */
+      /** Draft for the prompt layer: null means "showing the saved value". */
       const [draftChannel, setDraftChannel] = React.useState(null)
-      const [draftPersona, setDraftPersona] = React.useState(null)
 
       function savePrompts() {
-        const patch = {}
-        if (draftChannel !== null) patch.channelPrompt = draftChannel
-        if (draftPersona !== null) patch.personaPrompt = draftPersona
-        if (Object.keys(patch).length === 0) return
+        if (draftChannel === null) return
         setBindError('')
-        post(SETTINGS_URL, patch)
+        post(SETTINGS_URL, { channelPrompt: draftChannel })
           .then((body) => {
             if (!body || body.ok !== true) {
               setBindError((body && body.error) || t('bind.failed'))
               return
             }
             setDraftChannel(null)
-            setDraftPersona(null)
             refreshStatus()
           })
           .catch((error) => setBindError((error && error.message) || String(error)))
@@ -815,16 +810,8 @@ window.__ModuleLoader__.load({
             h('textarea', {
               value: draftChannel === null ? String(status.data.channelPrompt || '') : draftChannel,
               onChange: (event) => setDraftChannel(event.target.value),
-              rows: 4,
+              rows: 5,
               'aria-label': t('persona.channelLabel'),
-              style: TEXTAREA,
-            }),
-            h('p', { style: { ...MUTED, marginTop: '10px' } }, t('persona.personaLabel')),
-            h('textarea', {
-              value: draftPersona === null ? String(status.data.personaPrompt || '') : draftPersona,
-              onChange: (event) => setDraftPersona(event.target.value),
-              rows: 4,
-              'aria-label': t('persona.personaLabel'),
               style: TEXTAREA,
             }),
             h(
@@ -834,14 +821,11 @@ window.__ModuleLoader__.load({
                 label: t('persona.save'),
                 onClick: savePrompts,
                 variant: 'primary',
-                disabled: draftChannel === null && draftPersona === null,
+                disabled: draftChannel === null,
               }),
               h(Btn, {
                 label: t('persona.restore'),
-                onClick: () => {
-                  setDraftChannel(String(status.data.defaultChannelPrompt || ''))
-                  setDraftPersona(String(status.data.defaultPersonaPrompt || ''))
-                },
+                onClick: () => setDraftChannel(String(status.data.defaultChannelPrompt || '')),
               }),
               h('span', { style: { ...MUTED, margin: 0 } }, t('persona.hint')),
             ),
@@ -1158,12 +1142,11 @@ window.__ModuleLoader__.load({
       'merge.label': '文件合并',
       'merge.unit': '秒内追加的文字会跟文件一起发',
       'merge.hint': '发图/文件后等这么多秒：期间你打字就并成一条发给 agent，没打就等到点再发。填 0 = 不等，立刻发。',
-      'persona.heading': '提示词与人设',
+      'persona.heading': '提示词',
       'persona.channelLabel': '场合提示词（每条消息都会追加）',
-      'persona.personaLabel': '人设提示词（每条消息都会追加）',
       'persona.save': '保存提示词',
       'persona.restore': '恢复默认',
-      'persona.hint': '两条都会追加在消息末尾；保存后下一条消息生效，不用重启。',
+      'persona.hint': '追加在消息末尾；保存后下一条消息生效，不用重启。',
       'login.phase.idle': '准备中',
       'login.phase.starting': '正在获取二维码',
       'login.phase.waiting': '等待扫码',
@@ -1245,12 +1228,11 @@ window.__ModuleLoader__.load({
       'merge.unit': 'seconds to wait for your follow-up text',
       'merge.hint':
         'After a file: text you type within this window is sent together with it; silence sends the file on its own. 0 = never wait.',
-      'persona.heading': 'Prompts and persona',
+      'persona.heading': 'Prompt',
       'persona.channelLabel': 'Channel prompt (appended to every message)',
-      'persona.personaLabel': 'Persona prompt (appended to every message)',
-      'persona.save': 'Save prompts',
-      'persona.restore': 'Restore defaults',
-      'persona.hint': 'Both are appended after the message; saving is enough, the next turn uses them.',
+      'persona.save': 'Save prompt',
+      'persona.restore': 'Restore default',
+      'persona.hint': 'Appended after the message; saving is enough, the next turn uses it.',
       'login.phase.idle': 'Preparing',
       'login.phase.starting': 'Fetching the QR code',
       'login.phase.waiting': 'Waiting for a scan',

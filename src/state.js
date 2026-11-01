@@ -25,7 +25,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-import { DEFAULT_CHANNEL_PROMPT, DEFAULT_PERSONA_PROMPT, MAX_PROMPT_CHARS } from './persona.js'
+import { DEFAULT_CHANNEL_PROMPT, MAX_PROMPT_CHARS } from './persona.js'
 
 const STATE_VERSION = 1
 const MAX_ACCOUNTS = 5
@@ -159,10 +159,6 @@ export function normalizeState(raw) {
       source.channelPrompt === undefined
         ? DEFAULT_CHANNEL_PROMPT
         : clampPrompt(source.channelPrompt),
-    personaPrompt:
-      source.personaPrompt === undefined
-        ? DEFAULT_PERSONA_PROMPT
-        : clampPrompt(source.personaPrompt),
     lastError:
       source.lastError && typeof source.lastError === 'object'
         ? {

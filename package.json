@@ -1,6 +1,6 @@
 {
   "name": "dsh-webot",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "private": true,
   "description": "WeChat channel for DeepSeek Harness: bind WeChat, then drive the agent from your phone.",
   "type": "module",
@@ -15,7 +15,6 @@
     "index.js",
     "client.js",
     "src/**/*.js",
-    "personas/*.md",
     "cordis.patch.yml",
     "locale/*.json",
     "icon.svg",

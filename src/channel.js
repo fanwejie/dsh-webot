@@ -775,10 +775,7 @@ export function createChannel(options) {
     // block reads as user background, while trailing text sits closest to the
     // point where the model starts writing.
     const state = readState()
-    const tail = composeTail({
-      channelPrompt: state.channelPrompt,
-      personaPrompt: state.personaPrompt,
-    })
+    const tail = composeTail({ channelPrompt: state.channelPrompt })
     const body = tail ? `${content}\n\n${tail}` : content
 
     // Steer first: a message sent while the agent is working is an interruption,

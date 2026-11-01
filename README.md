@@ -75,31 +75,27 @@ M4 fixes it in two ways:
   conversation to any of them — including one you already had — or detaches it,
   so the next message starts a fresh session inside the workspace.
 
-## Prompts and persona
+## The prompt
 
-Two prompt layers, **both appended after the user's message, on every turn** and
-both editable in the panel:
+One editable note, **appended after the user's message, on every turn**:
 
-| Layer | Purpose |
+| Field | Purpose |
 | --- | --- |
-| 场合提示词 `channelPrompt` | Where the model is talking: a phone, no screen, no file access, send files with `send_to_wechat`, keep it short |
-| 人设提示词 `personaPrompt` | Who is speaking: tone, attitude, and the rule that tone must not cost the user information |
+| 场合提示词 `channelPrompt` | Where the model is talking: a phone, no screen, no file access, send files with `send_to_wechat`, keep it under three lines |
 
-**There is no chat/work switch.** An earlier version had one, and it was cut: the
-same conversation is the same person, and a register the user has to remember to
-flip makes half the answers arrive in the wrong voice. The persona text carries the
-rule instead — `闲聊就好好聊，让你干活就先把事办好再贫，不用谁提醒你切换` — and the
-model decides from what was actually said.
+That is the whole surface. A persona layer used to sit beside it and was removed on
+request: two boxes describing "how to behave" invite the same behaviour to be tuned
+in two places, and the persona text kept fighting the agent's own job. Anything you
+want said about tone now goes in this one box, and it is the same box that already
+knows you are on a phone.
 
-There is no `/role` either: the persona is a text field, not a file catalogue.
+There is no `/role`, no chat/work switch, and no `personas/` directory any more.
 
 ### Why it is shaped this way
 
 This follows `presenceNote` in
 [`dsh-wechat`](https://github.com/xcisxc29/dsh-wechat) (`packages/core/src/state.ts`,
-`packages/bundle/src/host.ts`), with one deliberate difference.
-
-Copied from it:
+`packages/bundle/src/host.ts`):
 
 - **A situation note, not a role-play card.** Its default text exists because
   "without it the agent answers as if its user sits at the desktop console" — the
@@ -113,28 +109,13 @@ Copied from it:
 - **`undefined` means default, `''` means off.** A cleared field stays cleared
   instead of silently snapping back.
 
-Deliberately different: **`presenceNote` has no persona layer**, because that
-project does not try to be a companion. This one does, so the two concerns are
-split: the channel note says how to behave *here*, the persona note says who is
-*speaking*. Keeping them apart is what lets the same agent hold a tone and still
-call tools — a single card saying "don't be an assistant, don't list steps" fights
-the tools it is required to use.
+The note is capped at 3000 characters: it rides on every turn. Length is stated as a
+rule rather than a preference — `一条回复别超过三行` — because "别太长" alone left the
+model judging its own length.
 
-The default persona text is a trimmed adaptation of
-[`chennianlaobai/qq-ai-bot` → `persona.md`](https://github.com/chennianlaobai/qq-ai-bot/blob/main/persona.md)
-(MIT, © chennianlaobai). `personas/dafeiyu.md` keeps the longer source version for
-reference; it is no longer injected.
-
-Both layers are capped at 3000 characters: they ride on every turn.
-
-Length is stated as a rule, not as a preference — `一条最多两句，能一句说完就一句。别复述
-对方刚给你的信息…` — because "keep it short" was ignored in practice: a reply came
-back restating the screenshot it had just been shown before reaching the joke. The
-same is true of `看图只挑一个点吐槽，别把图描述一遍`.
-
-The panel's 「恢复默认」 fills both textareas with the current shipped text. Without
-it, an earlier save would keep overriding every later improvement to the defaults,
-and getting the new wording back would mean retyping it.
+The panel's 「恢复默认」 fills the textarea with the current shipped text. Without it,
+an earlier save would keep overriding every later improvement to the default, and
+getting the new wording back would mean retyping it by hand.
 
 ### Reply bubbles
 

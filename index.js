@@ -20,7 +20,7 @@
 import path from 'node:path'
 
 import { createChannel } from './src/channel.js'
-import { DEFAULT_CHANNEL_PROMPT, DEFAULT_PERSONA_PROMPT, MAX_PROMPT_CHARS } from './src/persona.js'
+import { DEFAULT_CHANNEL_PROMPT, MAX_PROMPT_CHARS } from './src/persona.js'
 import { createLoginTask } from './src/protocol/login.js'
 import { readState, stateDirectory, stateFilePath, updateState } from './src/state.js'
 
@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.14.0'
+const VERSION = '0.15.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -124,12 +124,10 @@ function readStatus() {
     approvalTimeoutSec: state.approvalTimeoutSec || 30,
     mediaMergeSec: state.mediaMergeSec,
     channelPrompt: state.channelPrompt,
-    personaPrompt: state.personaPrompt,
-    // Shipped defaults, so the panel can offer "restore" without a second route.
+    // Shipped default, so the panel can offer "restore" without a second route.
     // Without this, a saved prompt would keep overriding an improved default
     // forever, and the only way back would be retyping it by hand.
     defaultChannelPrompt: DEFAULT_CHANNEL_PROMPT,
-    defaultPersonaPrompt: DEFAULT_PERSONA_PROMPT,
     diagnostics: {
       statePath: stateFilePath(),
       workspace: WORKSPACE_DIRECTORY,
@@ -480,16 +478,14 @@ export function apply(ctx) {
         patch.mediaMergeSec = Math.round(seconds)
       }
 
-      // Both prompt layers are free text. An empty string is stored as-is and
-      // means "off" — it is not silently replaced by the default, or the field
-      // could never be cleared.
-      for (const key of ['channelPrompt', 'personaPrompt']) {
-        if (payload && typeof payload[key] === 'string') {
-          if (payload[key].length > MAX_PROMPT_CHARS) {
-            return json({ ok: false, error: `${key} 超过 ${MAX_PROMPT_CHARS} 字` }, 400)
-          }
-          patch[key] = payload[key]
+      // The prompt is free text. An empty string is stored as-is and means "off" —
+      // it is not silently replaced by the default, or the field could never be
+      // cleared.
+      if (payload && typeof payload.channelPrompt === 'string') {
+        if (payload.channelPrompt.length > MAX_PROMPT_CHARS) {
+          return json({ ok: false, error: `channelPrompt 超过 ${MAX_PROMPT_CHARS} 字` }, 400)
         }
+        patch.channelPrompt = payload.channelPrompt
       }
 
       if (Object.keys(patch).length === 0) {
@@ -503,7 +499,6 @@ export function apply(ctx) {
         approvalTimeoutSec: next.approvalTimeoutSec,
         mediaMergeSec: next.mediaMergeSec,
         channelPrompt: next.channelPrompt,
-        personaPrompt: next.personaPrompt,
       })
     } catch (error) {
       return failure(error)

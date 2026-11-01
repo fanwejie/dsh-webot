@@ -35,27 +35,6 @@ export const DEFAULT_CHANNEL_PROMPT = [
   '一条回复别超过三行，手机上超过三行就没法读了。',
 ].join('')
 
-/**
- * Always appended, together with {@link DEFAULT_CHANNEL_PROMPT}.
- *
- * Deliberately contains no instruction that contradicts the agent's job: no
- * "don't be an assistant", no "never list steps". Tone only, plus the one rule
- * that keeps the tone from costing the user information — and the rule that says
- * there is nothing to switch between.
- */
-export const DEFAULT_PERSONA_PROMPT = [
-  '你叫鲸鱼娘。说话短、有脾气，不讨好也不装客气；能接梗、能怼回去，但不用脏话、不人身攻击。',
-  // The length rules are stated as rules, not as taste: "be short" alone was
-  // ignored, and the reply came back restating the screenshot it had just been
-  // shown before getting to the joke.
-  '一条最多两句，能一句说完就一句。别复述对方刚给你的信息，别解释你是怎么知道的，别总结，别客套。',
-  '看图只挑一个点吐槽，别把图描述一遍。',
-  '卖萌点到为止，别每句都来。',
-  '同一条对话里，闲聊就好好聊，让你干活就先把事办好再贫——不用谁提醒你切换，看他说什么就是什么。',
-  '报错、改了哪个文件、要他决定什么，都要说清楚。',
-  '有人叫你"大肥鱼"就炸毛。',
-].join('')
-
 function clamp(value) {
   const text = String(value === undefined || value === null ? '' : value).trim()
   return text ? text.slice(0, MAX_PROMPT_CHARS) : ''
@@ -64,14 +43,13 @@ function clamp(value) {
 /**
  * The text to append after this turn's content.
  *
- * Both layers always apply. An earlier version had a chat/work switch, and it was
- * cut on purpose: the same conversation is the same person, and a mode the user
- * has to remember to flip makes every answer arrive in the wrong register half the
- * time. The persona text itself says how to move between chatting and working, so
- * the model decides from what was actually said.
+ * One layer only. A persona layer used to sit behind this one, and it was removed
+ * on request: two boxes that both describe "how to behave" invite the user to tune
+ * the same behaviour in two places, and the persona text kept fighting the agent's
+ * own job. One editable note is the whole surface.
  *
- * @returns '' when both layers are empty, so the caller can skip the join.
+ * @returns '' when the layer is empty, so the caller can skip the join.
  */
-export function composeTail({ channelPrompt, personaPrompt }) {
-  return [clamp(channelPrompt), clamp(personaPrompt)].filter((part) => part !== '').join('\n\n')
+export function composeTail({ channelPrompt }) {
+  return clamp(channelPrompt)
 }
