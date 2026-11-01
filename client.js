@@ -765,17 +765,24 @@ window.__ModuleLoader__.load({
       /**
        * Draft for the every-turn reminder: null means "showing the saved value".
        *
-       * The channel prompt is no longer a draft here — it is a named scenario edited
-       * in its own dialog, so it saves on its own rather than with this field.
+       * With no save button, leaving the field is the commit — the same rule the
+       * number fields follow. A prompt that loses an unsaved edit because the panel
+       * was closed is worse than an extra request on blur.
        */
       const [draftAnchor, setDraftAnchor] = React.useState(null)
 
-      function savePrompts() {
+      function commitAnchor() {
         if (draftAnchor === null) return
+        if (draftAnchor === String((status.data || {}).anchorPrompt || '')) {
+          setDraftAnchor(null)
+          return
+        }
         setBindError('')
         post(SETTINGS_URL, { anchorPrompt: draftAnchor })
           .then((body) => {
             if (!body || body.ok !== true) {
+              // Keep the draft: the text the user typed must not vanish because the
+              // host rejected it.
               setBindError((body && body.error) || t('bind.failed'))
               return
             }
@@ -835,6 +842,25 @@ window.__ModuleLoader__.load({
             scenarios: remaining,
             activeScenarioId: remaining[0].id,
           })
+        },
+        [],
+      )
+
+      // Without a save button, an edit still in the box when the panel closes must not
+      // be thrown away: blur is not guaranteed on unmount, and closing by clicking the
+      // mask is the normal way to leave.
+      const anchorRef = React.useRef(null)
+      anchorRef.current = {
+        draft: draftAnchor,
+        saved: String((status.data || {}).anchorPrompt || ''),
+      }
+
+      React.useEffect(
+        () => () => {
+          const held = anchorRef.current
+          if (!held || held.draft === null) return
+          if (held.draft === held.saved) return
+          void post(SETTINGS_URL, { anchorPrompt: held.draft })
         },
         [],
       )
@@ -1151,6 +1177,8 @@ window.__ModuleLoader__.load({
             h('textarea', {
               value: draftAnchor === null ? String(status.data.anchorPrompt || '') : draftAnchor,
               onChange: (event) => setDraftAnchor(event.target.value),
+              // No save button: leaving the field commits, like the number fields.
+              onBlur: commitAnchor,
               // Two rows: this string goes out on every turn, so it is meant to stay
               // short — a tall box would invite it to grow.
               rows: 2,
@@ -1258,20 +1286,6 @@ window.__ModuleLoader__.load({
             pendingDeleteId
               ? h('p', { style: { ...MUTED, marginTop: '6px' } }, t('scenario.pendingHint'))
               : null,
-            h(
-              'div',
-              { style: { marginTop: '10px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-              h(Btn, {
-                label: t('persona.save'),
-                onClick: savePrompts,
-                variant: 'primary',
-                disabled: draftAnchor === null,
-              }),
-              h(Btn, {
-                label: t('persona.restoreAnchor'),
-                onClick: () => setDraftAnchor(String(status.data.defaultAnchorPrompt || '')),
-              }),
-            ),
             // Rendered here rather than at the root: it reads this group's state, and
             // `position: fixed` means its DOM parent does not matter.
             editor
@@ -1702,8 +1716,7 @@ window.__ModuleLoader__.load({
       'persona.heading': '提示词',
       'persona.anchorLabel': '每轮都追发的提醒',
       'persona.anchorHint':
-        '这条每轮都会追加，不按轮次省。它只干一件事：提醒 agent 必须调用 send_to_wechat，否则你收不到消息。可以改措辞，但清空就等于关掉——关掉之后它忘调工具时不会有任何提示。',
-      'persona.restoreAnchor': '恢复提醒默认',
+        '这条每轮都会追加，不按轮次省。它只干一件事：提醒 agent 必须调用 send_to_wechat，否则你收不到消息。可以改措辞，离开这个框就保存；清空等于关掉——关掉之后它忘调工具时不会有任何提示。',
       'scenario.label': '场景提示词',
       'scenario.hint':
         '一套"怎么说话、在什么场合"的完整说明。可以存多套，随时切换——比如"工作"和"闲聊"两套不同的语气。只有选中的那套会发给 agent。',
@@ -1723,8 +1736,7 @@ window.__ModuleLoader__.load({
       'prompt.enableHint':
         '关掉后不再追加那段长提示词，只发每轮提醒。适合你只想让它干活、不想让它演人格的时候。',
       'prompt.enableState': '下面的场景提示词与重发轮次都受这个开关控制',
-      'persona.save': '保存提示词',
-      'persona.hint': '追加在消息末尾；保存后下一条消息生效，不用重启。',
+      'persona.hint': '追加在消息末尾；改完离开输入框就生效，不用重启。',
       'login.phase.idle': '准备中',
       'login.phase.starting': '正在获取二维码',
       'login.phase.waiting': '等待扫码',
@@ -1849,8 +1861,7 @@ window.__ModuleLoader__.load({
       'persona.heading': 'Prompt',
       'persona.anchorLabel': 'Reminder sent every turn',
       'persona.anchorHint':
-        'This one is appended on every turn, never skipped. It does exactly one job: remind the agent that it must call send_to_wechat or you receive nothing. Change the wording freely, but clearing it turns it off - and then a forgotten tool call is silent.',
-      'persona.restoreAnchor': 'Restore reminder',
+        'This one is appended on every turn, never skipped. It does exactly one job: remind the agent that it must call send_to_wechat or you receive nothing. Change the wording freely - leaving the box saves it. Clearing it turns it off, and then a forgotten tool call is silent.',
       'scenario.label': 'Scenario prompt',
       'scenario.hint':
         'A complete "where we are and how to talk" note. Keep as many as you like and switch between them - a work voice and a chat voice, for example. Only the selected one is sent.',
@@ -1870,8 +1881,7 @@ window.__ModuleLoader__.load({
       'prompt.enableHint':
         'Off means the long note is never appended, only the every-turn reminder. Useful when you want the work done without any persona.',
       'prompt.enableState': 'This switch governs the scenario prompt below and its resend interval',
-      'persona.save': 'Save prompt',
-      'persona.hint': 'Appended after the message; saving is enough, the next turn uses it.',
+      'persona.hint': 'Appended after the message; leaving the box saves it, no restart needed.',
       'login.phase.idle': 'Preparing',
       'login.phase.starting': 'Fetching the QR code',
       'login.phase.waiting': 'Waiting for a scan',
