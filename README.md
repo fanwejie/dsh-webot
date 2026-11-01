@@ -64,14 +64,18 @@ M4 fixes it in two ways:
 
 ## Persona and register
 
-Two registers, one conversation:
+Two registers, one conversation. Both the panel and WeChat can change them:
 
-| Command | Effect |
-| --- | --- |
-| `/chat` (default) | Prepend the persona card: a chat partner, not an assistant |
-| `/work` | Drop the card and prepend a one-line "工具型助手" instruction instead |
-| `/role` | List the cards in `personas/` and show the current one |
-| `/role <name>` | Switch cards; the next message uses it |
+| Panel | Command | Effect |
+| --- | --- | --- |
+| 说话模式 | `/chat` (default) | Prepend the persona card: a chat partner, not an assistant |
+| 说话模式 | `/work` | Drop the card and prepend a one-line "工具型助手" instruction instead |
+| 人格卡 | `/role` | List the cards in `personas/` and show the current one |
+| 人格卡 | `/role <name>` | Switch cards; the next message uses it |
+
+The panel's 「人格」 section reads the same state and writes through
+`POST /api/webot/settings`; the card list comes from the Host scanning
+`personas/`, so dropping a new `.md` there makes it appear without a restart.
 
 Cards are plain markdown under `personas/`. Editing the file needs no code change
 and no restart — the next message reads it. One card is capped at 8000 characters

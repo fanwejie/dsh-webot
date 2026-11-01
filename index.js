@@ -20,6 +20,7 @@
 import path from 'node:path'
 
 import { createChannel } from './src/channel.js'
+import { roleNames } from './src/persona.js'
 import { createLoginTask } from './src/protocol/login.js'
 import { readState, stateDirectory, stateFilePath, updateState } from './src/state.js'
 
@@ -31,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.10.0'
+const VERSION = '0.10.1'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -123,6 +124,8 @@ function readStatus() {
     approvalTimeoutSec: state.approvalTimeoutSec || 30,
     personaMode: state.personaMode || 'chat',
     personaRole: state.personaRole || 'dafeiyu',
+    // Cards found on disk, so the panel can offer them without a second route.
+    personaRoles: roleNames(),
     diagnostics: {
       statePath: stateFilePath(),
       workspace: WORKSPACE_DIRECTORY,
@@ -465,6 +468,21 @@ export function apply(ctx) {
         patch.approvalTimeoutSec = Math.round(seconds)
       }
 
+      if (payload && typeof payload.personaMode === 'string') {
+        if (!['chat', 'work'].includes(payload.personaMode)) {
+          return json({ ok: false, error: 'personaMode 只能是 chat / work' }, 400)
+        }
+        patch.personaMode = payload.personaMode
+      }
+
+      if (payload && typeof payload.personaRole === 'string') {
+        const names = roleNames()
+        if (!names.includes(payload.personaRole)) {
+          return json({ ok: false, error: `没有这个人格：${payload.personaRole}` }, 400)
+        }
+        patch.personaRole = payload.personaRole
+      }
+
       if (Object.keys(patch).length === 0) {
         return json({ ok: false, error: '没有可更新的字段' }, 400)
       }
@@ -474,6 +492,9 @@ export function apply(ctx) {
         ok: true,
         approvalMode: next.approvalMode,
         approvalTimeoutSec: next.approvalTimeoutSec,
+        personaMode: next.personaMode,
+        personaRole: next.personaRole,
+        personaRoles: roleNames(),
       })
     } catch (error) {
       return failure(error)
