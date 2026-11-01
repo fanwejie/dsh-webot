@@ -778,6 +778,13 @@ window.__ModuleLoader__.load({
                 variant: 'primary',
                 disabled: draftChannel === null && draftPersona === null,
               }),
+              h(Btn, {
+                label: t('persona.restore'),
+                onClick: () => {
+                  setDraftChannel(String(status.data.defaultChannelPrompt || ''))
+                  setDraftPersona(String(status.data.defaultPersonaPrompt || ''))
+                },
+              }),
               h('span', { style: { ...MUTED, margin: 0 } }, t('persona.hint')),
             ),
           ),
@@ -1094,6 +1101,7 @@ window.__ModuleLoader__.load({
       'persona.channelLabel': '场合提示词（每条消息都会追加）',
       'persona.personaLabel': '人设提示词（每条消息都会追加）',
       'persona.save': '保存提示词',
+      'persona.restore': '恢复默认',
       'persona.hint': '两条都会追加在消息末尾；保存后下一条消息生效，不用重启。',
       'login.phase.idle': '准备中',
       'login.phase.starting': '正在获取二维码',
@@ -1176,6 +1184,7 @@ window.__ModuleLoader__.load({
       'persona.channelLabel': 'Channel prompt (appended to every message)',
       'persona.personaLabel': 'Persona prompt (appended to every message)',
       'persona.save': 'Save prompts',
+      'persona.restore': 'Restore defaults',
       'persona.hint': 'Both are appended after the message; saving is enough, the next turn uses them.',
       'login.phase.idle': 'Preparing',
       'login.phase.starting': 'Fetching the QR code',

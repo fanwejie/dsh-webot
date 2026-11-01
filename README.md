@@ -114,6 +114,15 @@ reference; it is no longer injected.
 
 Both layers are capped at 3000 characters: they ride on every turn.
 
+Length is stated as a rule, not as a preference — `一条最多两句，能一句说完就一句。别复述
+对方刚给你的信息…` — because "keep it short" was ignored in practice: a reply came
+back restating the screenshot it had just been shown before reaching the joke. The
+same is true of `看图只挑一个点吐槽，别把图描述一遍`.
+
+The panel's 「恢复默认」 fills both textareas with the current shipped text. Without
+it, an earlier save would keep overriding every later improvement to the defaults,
+and getting the new wording back would mean retyping it.
+
 ### Reply bubbles
 
 An agent answer is split into separate WeChat messages at sentence boundaries —

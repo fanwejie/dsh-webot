@@ -20,7 +20,7 @@
 import path from 'node:path'
 
 import { createChannel } from './src/channel.js'
-import { MAX_PROMPT_CHARS } from './src/persona.js'
+import { DEFAULT_CHANNEL_PROMPT, DEFAULT_PERSONA_PROMPT, MAX_PROMPT_CHARS } from './src/persona.js'
 import { createLoginTask } from './src/protocol/login.js'
 import { readState, stateDirectory, stateFilePath, updateState } from './src/state.js'
 
@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.12.1'
+const VERSION = '0.12.2'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -124,6 +124,11 @@ function readStatus() {
     approvalTimeoutSec: state.approvalTimeoutSec || 30,
     channelPrompt: state.channelPrompt,
     personaPrompt: state.personaPrompt,
+    // Shipped defaults, so the panel can offer "restore" without a second route.
+    // Without this, a saved prompt would keep overriding an improved default
+    // forever, and the only way back would be retyping it by hand.
+    defaultChannelPrompt: DEFAULT_CHANNEL_PROMPT,
+    defaultPersonaPrompt: DEFAULT_PERSONA_PROMPT,
     diagnostics: {
       statePath: stateFilePath(),
       workspace: WORKSPACE_DIRECTORY,
