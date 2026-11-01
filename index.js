@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.16.0'
+const VERSION = '0.17.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -277,9 +277,9 @@ export function apply(ctx) {
     }
   }
 
-  // The one tool this plugin adds: hand the phone a file the agent produced.
-  // Read optionally so a composition without the tool registry still runs the
-  // channel; the agent simply cannot send media back there.
+  // The one tool this plugin adds, and in tool-only mode the *only* way a reply
+  // reaches the phone. Read optionally so a composition without the tool registry
+  // still runs the channel; there the agent simply cannot answer.
   const tools = ctx.get('tools')
   if (tools && typeof tools.register === 'function') {
     ctx.effect(
@@ -287,17 +287,23 @@ export function apply(ctx) {
         tools.register({
           name: 'send_to_wechat',
           description:
-            '把一个本地文件发到当前会话绑定的微信对话里。图片（jpg/png/gif/webp）、视频（mp4/mov）和普通文件都支持。只在微信会话里可用。',
+            '把消息发到微信。**每轮回复都必须调用它，否则用户什么都收不到**——你的正文不会被自动转发。' +
+            '用 text 发文字（一次一句，想分几条就调用几次）；用 path 发图片/视频/文件（jpg/png/gif/webp、mp4/mov 或普通文件）。' +
+            '也可以同时给 text 和 path：先发文字再发文件。',
           parameters: {
             type: 'object',
             properties: {
+              text: {
+                type: 'string',
+                description: '要发的文字。想分成几条微信消息，就像真人那样多调用几次，每次一句',
+              },
               path: {
                 type: 'string',
                 description: '要发送的文件路径；相对路径按当前会话的工作目录解析',
               },
               caption: { type: 'string', description: '可选，随文件一起发的一句说明' },
             },
-            required: ['path'],
+            required: [],
             additionalProperties: false,
           },
           output: {
@@ -307,6 +313,7 @@ export function apply(ctx) {
                 sent: { type: 'boolean' },
                 kind: { type: 'string' },
                 fileName: { type: 'string' },
+                chars: { type: 'number' },
                 bytes: { type: 'number' },
               },
               required: ['sent'],
@@ -318,11 +325,23 @@ export function apply(ctx) {
             const sessionId =
               exec && exec.agent && exec.agent.id ? String(exec.agent.id) : ''
             if (!sessionId) throw new Error('拿不到当前会话，无法确定发往哪个微信对话')
-            return liveChannel.sendFileToConversation(
-              sessionId,
-              String((args && args.path) || ''),
-              args && args.caption ? String(args.caption) : '',
-            )
+
+            const text = args && typeof args.text === 'string' ? args.text.trim() : ''
+            const filePath = args && typeof args.path === 'string' ? args.path.trim() : ''
+            if (!text && !filePath) throw new Error('text 和 path 至少给一个，否则没有东西可发')
+
+            // Text first: a caption describes the file that follows it.
+            let result
+            if (text) result = await liveChannel.sendTextToConversation(sessionId, text)
+            if (filePath) {
+              const sentFile = await liveChannel.sendFileToConversation(
+                sessionId,
+                filePath,
+                args && args.caption ? String(args.caption) : '',
+              )
+              result = { ...sentFile, ...(result || {}) , sent: true }
+            }
+            return result
           },
         }),
       'dsh-webot: send_to_wechat tool',

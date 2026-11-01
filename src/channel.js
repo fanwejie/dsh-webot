@@ -7,18 +7,15 @@
  *
  * ## When the reply is sent
  *
- * An assistant turn is not one stream. Every model step opens its own attempt and
- * emits its own `end` frame, so a turn that calls a tool produces several, with a
- * pause in between that is longer than any short quiet period.
+ * Nothing is forwarded automatically. The agent composes each message through
+ * `send_to_wechat`, so it owns what is said, how many messages there are, and
+ * whether this turn answers at all — the decision the previous auto-forward could
+ * not make, and the reason one answer used to arrive as two mismatched messages.
  *
- * That pause is what made one answer arrive as two WeChat messages with different
- * content: a 700 ms quiet timer fired inside it, sent the text so far, and the rest
- * followed after the tool returned.
- *
- * The flush is therefore driven by `agent/status` going `idle` — the point where no
- * driver remains for that session and everything accumulated belongs to the answer
- * that just finished. {@link FALLBACK_FLUSH_MS} only covers a stream that ends
- * without that transition.
+ * The stream is still accumulated, but only as evidence: when the turn's driver
+ * goes `idle`, `retireTurnText` records how much the model drafted and how many
+ * sends it actually made. `tool-sends=0` next to a non-empty draft is a reply that
+ * went nowhere, and that is the one failure this design can produce.
  *
  * @module dsh-webot/channel
  */
@@ -35,16 +32,6 @@ import { appendEventLog, readState, updateState } from './state.js'
 
 /** Longest slice of one answer sent as a single WeChat message. */
 const MAX_REPLY_CHARS = 1200
-
-/**
- * Fallback quiet period before an answer is flushed.
- *
- * Not the primary signal any more. A turn that calls a tool pauses for far longer
- * than this between steps, and flushing there sent half the answer, then the other
- * half as a second message. `agent/status` going `idle` is the real end of a turn;
- * this timer only covers a stream that ends without that transition.
- */
-const FALLBACK_FLUSH_MS = 3000
 
 /** Pause after a poll or send failure before trying again. */
 const RETRY_MS = 1500
@@ -141,6 +128,13 @@ function splitReply(text) {
 }
 
 /**
+ * Bubble splitting — idle while replies are tool-only.
+ *
+ * Nothing calls this any more: the agent composes each message through
+ * `send_to_wechat`, so segmentation is its decision and this splitter would only
+ * second-guess it. It stays because it is the piece a future "auto-forward unless
+ * the agent already sent" mode needs, and it is tested.
+ *
  * Characters that end a bubble when the answer is prose.
  *
  * Closing Chinese quotes are included on purpose: a quoted phrase is where a
@@ -394,6 +388,14 @@ export function createChannel(options) {
    * mean one thing.
    */
   const pendingQuestions = new Map()
+  /**
+   * sessionId -> sends made through `send_to_wechat` during the current turn.
+   *
+   * Reset when a turn is submitted and read when it goes idle: zero sends plus a
+   * non-empty draft is the silent-drop case, and it is the only thing standing
+   * between this design and an invisible failure.
+   */
+  const toolSends = new Map()
   /**
    * conversationKey -> files held for their follow-up text.
    *
@@ -666,9 +668,11 @@ export function createChannel(options) {
    * workspace only when the session cannot be found.
    */
   async function sendFileToConversation(sessionId, filePath, caption) {
-    const direct = targetForSession(sessionId)
-    const target = direct || boundConversationTarget()
-    if (!target) throw new Error('这台机器还没绑定微信，文件发不出去')
+    const target = resolveOutboundTarget(sessionId)
+    const direct = !target.crossSession
+    // Counted before the attempt so a turn that sent a file is never reported as
+    // one that stayed silent.
+    toolSends.set(sessionId, (toolSends.get(sessionId) || 0) + 1)
 
     const account = readState().accounts.find((entry) => entry.accountId === target.accountId)
     if (!account) throw new Error('找不到可用的微信账号')
@@ -895,6 +899,9 @@ export function createChannel(options) {
       sessionId,
       content: [{ type: 'text', text: body }],
     }
+    // The turn's accounting starts here: no sends yet, no draft yet.
+    toolSends.delete(sessionId)
+    pendingText.delete(sessionId)
     const promptSignal = signal || new AbortController().signal
     try {
       await sessionController.prompt({ ...request, mode: 'steer' }, promptSignal)
@@ -1298,59 +1305,58 @@ export function createChannel(options) {
     return reply(HELP_TEXT)
   }
 
-  async function flush(sessionId) {
+  /**
+   * Retire the turn's accumulated text without sending it.
+   *
+   * Tool-only mode: the agent owns delivery, so this text is a draft it chose not
+   * to send (or already paraphrased into `send_to_wechat` calls). It is dropped
+   * rather than forwarded, and the count of tool sends in this turn decides which
+   * of the two happened — which is the difference between normal operation and a
+   * reply that silently went nowhere.
+   */
+  function retireTurnText(sessionId, reason) {
     settleTimers.delete(sessionId)
     const text = (pendingText.get(sessionId) || '').trim()
     pendingText.delete(sessionId)
-    if (!text) {
-      note('flush', `${sessionId} · empty`)
-      return
-    }
-
-    const target = replyTargets.get(sessionId)
-    if (!target) {
-      note('flush', `${sessionId} · no target`)
-      return
-    }
-
-    note('flush', `${sessionId} · ${text.length} chars`)
-    // This is the one path that carries an agent answer, so it is the one that
-    // asks for bubble splitting.
-    await sendReply(target.accountId, target.toUserId, target.contextToken, text, { bubbles: true })
-  }
-
-  function scheduleFlush(sessionId) {
-    const existing = settleTimers.get(sessionId)
-    if (existing) clearTimeout(existing)
-    settleTimers.set(
-      sessionId,
-      setTimeout(() => {
-        void flush(sessionId)
-      }, FALLBACK_FLUSH_MS),
+    const sent = toolSends.get(sessionId) || 0
+    toolSends.delete(sessionId)
+    note(
+      'turn',
+      `${shortId(sessionId)} | ${reason} | tool-sends=${sent} | draft=${text.length} chars${sent === 0 && text ? ' | NO REPLY SENT' : ''}`,
     )
   }
 
-  /**
-   * Flush the moment the turn's driver goes idle.
-   *
-   * This is what stops one answer arriving as two messages: a turn that calls a
-   * tool pauses between steps, and any quiet-period timer fires in that gap. `idle`
-   * means no driver remains, so everything accumulated belongs to the answer that
-   * just finished.
-   */
+  /** The turn's driver went idle: whatever it drafted is no longer live. */
   function handleAgentStatus(payload) {
     if (!payload || payload.status !== 'idle') return
     const sessionId = sessionIdOf(payload)
     if (!sessionId) return
     if (!replyTargets.has(sessionId)) return
-    if (!(pendingText.get(sessionId) || '').trim()) return
-    const timer = settleTimers.get(sessionId)
-    if (timer) {
-      clearTimeout(timer)
-      settleTimers.delete(sessionId)
-    }
-    note('flush', `${sessionId} · idle`)
-    void flush(sessionId)
+    retireTurnText(sessionId, 'idle')
+  }
+
+  /**
+   * Send one composed message to the conversation that owns `sessionId`.
+   *
+   * The agent calls this instead of having its text forwarded, so the message is
+   * sent as written: no bubble splitting, only the size cap a single WeChat message
+   * requires. Segmentation is the caller's decision now.
+   */
+  async function sendTextToConversation(sessionId, text) {
+    const body = String(text || '').trim()
+    if (!body) throw new Error('text 是空的，没东西可发')
+
+    const target = resolveOutboundTarget(sessionId)
+    toolSends.set(sessionId, (toolSends.get(sessionId) || 0) + 1)
+    await sendReply(target.accountId, target.toUserId, target.contextToken, body)
+    return { sent: true, chars: body.length }
+  }
+  /** Where an outbound send goes: this session's conversation, else the bound one. */
+  function resolveOutboundTarget(sessionId) {
+    const direct = targetForSession(sessionId)
+    const target = direct || boundConversationTarget()
+    if (!target) throw new Error('这台机器还没绑定微信，发不出去')
+    return { ...target, crossSession: !direct }
   }
 
   /** Feed one `agent/assistant-stream` payload. Sessions this channel does not own are ignored. */
@@ -1359,22 +1365,6 @@ export function createChannel(options) {
     if (!sessionId || !replyTargets.has(sessionId)) return
     const frame = payload.frame
     if (!frame || typeof frame !== 'object') return
-
-    if (frame.type === 'start') {
-      // A new model step: any pending flush belongs before this step, not inside it.
-      const timer = settleTimers.get(sessionId)
-      if (timer) {
-        clearTimeout(timer)
-        settleTimers.delete(sessionId)
-      }
-      return
-    }
-
-    if (frame.type === 'end') {
-      scheduleFlush(sessionId)
-      return
-    }
-
     if (frame.type !== 'chunk') return
     const chunk = frame.chunk
     if (!chunk || chunk.type !== 'text-delta' || typeof chunk.text !== 'string') return
@@ -1497,6 +1487,7 @@ export function createChannel(options) {
     handleApproval,
     handleQuestion,
     sendFileToConversation,
+    sendTextToConversation,
     startAccount,
     startAll,
     stopAccount,

@@ -22,17 +22,26 @@
 export const MAX_PROMPT_CHARS = 3000
 
 /**
- * Always appended, in both registers.
+ * Always appended, before every turn.
  *
- * Kept short on purpose. The model already knows how to be an agent; what it
- * cannot know is that its user is on a phone.
+ * Three jobs, in order of how badly their absence breaks the channel:
+ *
+ * 1. **Nothing is sent automatically.** This is the one line that makes the whole
+ *    tool-only design safe: if the model does not call `send_to_wechat`, the user
+ *    receives nothing and there is no error anywhere. It is stated first and
+ *    without hedging because it is the only failure here that cannot be repaired
+ *    afterwards.
+ * 2. Where the conversation is happening — a phone, no screen, no file access.
+ * 3. How to lay the message out: short lines, and split into several calls when it
+ *    wants the rhythm of separate messages, since it now owns that decision.
  */
 export const DEFAULT_CHANNEL_PROMPT = [
-  '[渠道：微信] 你在和微信上的用户对话，对方在手机上，看不到这台电脑的屏幕，也没法自己打开文件。',
-  '不要让他去"打开某个路径"或"看某个文件"。要给他看东西时，用 send_to_wechat 直接发：',
-  '图片和视频会显示成照片/视频，其他文件作为附件发过去。',
-  // A number, not an adjective: "别太长" left the model judging its own length.
-  '一条回复别超过三行，手机上超过三行就没法读了。',
+  '[渠道：微信] 你在和微信上的用户对话。',
+  '【最重要的规则】你的回复不会自动发出去。每轮结束前必须调用 send_to_wechat 的 text 参数，',
+  '把你真正想说的话发给他；不调用，他就什么都收不到，而且不会有任何报错。',
+  '对方在手机上，看不到这台电脑的屏幕，也没法自己打开文件，别让他去"打开某个路径"。',
+  '要给他看东西就用 send_to_wechat 发路径：图片和视频显示成照片/视频，其他文件作为附件。',
+  '说话按微信来：一条别超过三行；想分成几条说，就像真人那样多调用几次 text，一次一句。',
 ].join('')
 
 function clamp(value) {

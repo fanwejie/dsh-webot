@@ -29,21 +29,29 @@ WeChat ──► iLink getupdates (long poll, 35s)
         sessionController.prompt({ sessionId, content:[{type:'text'}] })
              │
              ▼
-        agent/assistant-stream ──► text-delta accumulated per session
-             │  flush when agent/status goes idle
-             ▼
-        iLink sendmessage ──► the phone
+        agent runs tools ──► send_to_wechat(text|path) ──► iLink ──► the phone
+             │
+             └─► agent/assistant-stream is accumulated as *evidence only*
 ```
 
-**When the answer is sent.** An assistant turn is not one stream: every model step
-opens its own attempt and emits its own `end` frame, so a turn that calls a tool
-produces several, with a pause in between. A quiet-period timer fires inside that
-pause — which is why one answer once arrived as two messages with different
-content, while DSH showed only the final one.
+**Nothing is forwarded automatically.** The agent composes every message through
+`send_to_wechat`, so it decides what is said, how many messages there are, and
+whether this turn answers at all.
 
-The flush is therefore driven by `agent/status` going `idle`: no driver remains for
-that session, so everything accumulated is the finished answer. A 3 s
-`FALLBACK_FLUSH_MS` covers a stream that ends without that transition.
+That decision is why this mode replaced auto-forwarding: one answer used to arrive
+as two mismatched messages, because a quiet-period timer fired in the pause a tool
+call creates between model steps, sent the text so far, and the rest followed
+afterwards.
+
+The stream is still accumulated, but only to answer one question at `agent/status`
+`idle`: **did this turn actually reply?** The log records it as
+`turn <id> | idle | tool-sends=N | draft=M chars`, and appends `NO REPLY SENT` when
+the model drafted text and sent nothing. That case is the only failure this design
+can produce, and it is the reason the counter exists.
+
+Because delivery is a decision, the channel prompt states it first and without
+hedging: *每轮结束前必须调用 send_to_wechat 的 text 参数……不调用，他就什么都收不到，
+而且不会有任何报错。*
 
 ### Interrupting a running turn
 
@@ -122,9 +130,16 @@ getting the new wording back would mean retyping it by hand.
 
 ### Reply bubbles
 
-An agent answer is split into separate WeChat messages at sentence boundaries —
-`。！？!?…`, newlines, and closing Chinese quotes (`」”』`), because that is where a
-person stops and starts a new bubble.
+**Idle in this mode.** The splitter is still in `src/channel.js` and still tested —
+a future "auto-forward unless the agent already sent" mode needs exactly it — but
+nothing calls it now: the agent composes each message through `send_to_wechat`, so
+how many messages there are is its decision, and splitting its text would
+second-guess it.
+
+What the splitter did, and the rules it learned from real traffic, for when it comes
+back: an answer was cut at sentence boundaries — `。！？!?…`, newlines, and closing
+Chinese quotes (`」”』`) — because that is where a person stops and starts a new
+bubble.
 
 **Only long answers are split.** Measured from real traffic, a 73-character reply
 came out as four messages of 10/45/4/12 characters — the report was "乱七八糟",
