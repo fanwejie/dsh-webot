@@ -42,6 +42,19 @@ answer into several WeChat messages; flushing on the `finish` chunk is worse,
 because that fires once per step too. A `start` arriving inside the quiet window
 cancels the flush — which is exactly the tool-call case.
 
+### Interrupting a running turn
+
+A message sent while the agent is working is submitted as `steer`, not `queue`.
+Queueing it means the user is answering an answer that is already stale, and the
+agent finishes work nobody asked for any more — which is what makes a busy session
+feel like it is ignoring the phone.
+
+A refused `steer` is a real outcome, not an error: the turn it targeted can end
+between the decision and the submit. The message is then submitted as `queue`,
+because losing it is the one failure nothing can repair. The log records which
+happened (`prompt steered` / `prompt queued`), so a session that never interrupts
+is diagnosable rather than mysterious.
+
 `cwd` for every session this channel creates is fixed at `$DSH_HOME/dsh_webot`.
 It must never vary per conversation: the Host matches an adopted session by
 `cwd`, and a mismatch makes that session permanently unreachable.

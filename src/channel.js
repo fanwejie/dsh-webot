@@ -781,16 +781,28 @@ export function createChannel(options) {
     })
     const body = tail ? `${content}\n\n${tail}` : content
 
-    await sessionController.prompt(
-      {
-        requestId: `webot-${crypto.randomUUID()}`,
-        sessionId,
-        mode: 'queue',
-        content: [{ type: 'text', text: body }],
-      },
-      signal || new AbortController().signal,
-    )
-    note('prompt', 'accepted')
+    // Steer first: a message sent while the agent is working is an interruption,
+    // not a queued item. Waiting for the turn to end means the user answers the
+    // previous answer, and by then the agent has moved on — which is what made a
+    // working session feel like it was ignoring the phone.
+    //
+    // A refused steer is a real outcome, not an error: the turn it targeted can
+    // end between the decision and the submit. The queue is then the fallback,
+    // because losing the message is the one failure nothing can repair.
+    const request = {
+      requestId: `webot-${crypto.randomUUID()}`,
+      sessionId,
+      content: [{ type: 'text', text: body }],
+    }
+    const promptSignal = signal || new AbortController().signal
+    try {
+      await sessionController.prompt({ ...request, mode: 'steer' }, promptSignal)
+      note('prompt', 'steered')
+    } catch (error) {
+      note('prompt', `steer refused | ${String((error && error.message) || error)} → queue`)
+      await sessionController.prompt({ ...request, mode: 'queue' }, promptSignal)
+      note('prompt', 'queued')
+    }
     clearError(account.accountId)
   }
 
