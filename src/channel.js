@@ -922,7 +922,10 @@ export function createChannel(options) {
     // likely to be needed; the anchor line goes out every turn regardless, because
     // the rule it carries is the one failure with no recovery.
     const state = readState()
-    const promptText = composeTail({ channelPrompt: state.channelPrompt })
+    // The switch in the panel governs the long note only. '' here makes
+    // takePromptFor fall straight through to the anchor, which has no switch on
+    // purpose: it is the one line whose absence silences the reply path.
+    const promptText = state.channelPromptEnabled === false ? '' : composeTail({ channelPrompt: state.channelPrompt })
     const tail = takePromptFor(account.accountId, userId, promptText, state)
     const body = tail ? `${content}\n\n${tail}` : content
 

@@ -37,7 +37,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.25.0'
+const VERSION = '0.26.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -136,6 +136,7 @@ function readStatus() {
     mediaMaxPerMessage: state.mediaMaxPerMessage,
     maxListRows: state.maxListRows,
     channelPrompt: state.channelPrompt,
+    channelPromptEnabled: state.channelPromptEnabled,
     anchorPrompt: state.anchorPrompt,
     // Shipped default, so the panel can offer "restore" without a second route.
     // Without this, a saved prompt would keep overriding an improved default
@@ -559,6 +560,10 @@ export function apply(ctx) {
         patch.mediaMergeSec = Math.round(seconds)
       }
 
+      if (payload && payload.channelPromptEnabled !== undefined) {
+        patch.channelPromptEnabled = payload.channelPromptEnabled === true
+      }
+
       if (payload && typeof payload.anchorPrompt === 'string') {
         if (payload.anchorPrompt.length > MAX_ANCHOR_CHARS) {
           return json({ ok: false, error: `anchorPrompt 超过 ${MAX_ANCHOR_CHARS} 字` }, 400)
@@ -594,6 +599,7 @@ export function apply(ctx) {
         mediaMaxPerMessage: next.mediaMaxPerMessage,
         maxListRows: next.maxListRows,
         channelPrompt: next.channelPrompt,
+        channelPromptEnabled: next.channelPromptEnabled,
         anchorPrompt: next.anchorPrompt,
       })
     } catch (error) {

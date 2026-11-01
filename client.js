@@ -1002,20 +1002,9 @@ window.__ModuleLoader__.load({
           h(
             Group,
             { t, title: t('persona.heading'), hint: t('persona.hint') },
-            h(NumberField, {
-              t,
-              label: t('promptRefresh.label'),
-              hint: t('promptRefresh.hint'),
-              unit: t('promptRefresh.unit'),
-              value: status.data.promptRefreshTurns,
-              min: 1,
-              max: 200,
-              fallback: 20,
-              onCommit: (value) => postSettings({ promptRefreshTurns: value }),
-            }),
             h(
               'p',
-              { style: { ...MUTED, marginTop: '10px' } },
+              { style: { ...MUTED } },
               t('persona.anchorLabel'),
               h(Hint, { t, text: t('persona.anchorHint') }),
             ),
@@ -1028,15 +1017,51 @@ window.__ModuleLoader__.load({
               'aria-label': t('persona.anchorLabel'),
               style: TEXTAREA,
             }),
-            h('p', { style: { ...MUTED, marginTop: '10px' } }, t('persona.channelLabel')),
+            // The switch covers the long note only. The anchor above has none on
+            // purpose: it is the line whose absence silences every reply.
+            h(
+              'div',
+              { style: { ...FIELD_ROW, alignItems: 'center', marginTop: '12px' } },
+              h('span', { style: FIELD_NAME }, t('prompt.enable'), h(Hint, { t, text: t('prompt.enableHint') })),
+              h('input', {
+                type: 'checkbox',
+                checked: status.data.channelPromptEnabled !== false,
+                onChange: (event) => postSettings({ channelPromptEnabled: Boolean(event.target.checked) }),
+                'aria-label': t('prompt.enable'),
+                style: { width: '14px', height: '14px', margin: 0, accentColor: 'var(--dsw-alias-brand-primary)' },
+              }),
+              h('span', { style: { ...MUTED, margin: 0 } }, t('prompt.enableState')),
+            ),
+            h(NumberField, {
+              t,
+              label: t('promptRefresh.label'),
+              hint: t('promptRefresh.hint'),
+              unit: t('promptRefresh.unit'),
+              value: status.data.promptRefreshTurns,
+              min: 1,
+              max: 200,
+              fallback: 20,
+              disabled: status.data.channelPromptEnabled === false,
+              onCommit: (value) => postSettings({ promptRefreshTurns: value }),
+            }),
+            h(
+              'p',
+              { style: { ...MUTED, marginTop: '10px' } },
+              t('persona.channelLabel'),
+              h(Hint, { t, text: t('persona.channelHint') }),
+            ),
             h('textarea', {
               value: draftChannel === null ? String(status.data.channelPrompt || '') : draftChannel,
               onChange: (event) => setDraftChannel(event.target.value),
+              disabled: status.data.channelPromptEnabled === false,
               // Tall enough to read a real prompt: the shipped default is ~260 lines,
               // and a five-row box makes editing it a scroll hunt.
               rows: 12,
               'aria-label': t('persona.channelLabel'),
-              style: TEXTAREA,
+              style: {
+                ...TEXTAREA,
+                opacity: status.data.channelPromptEnabled === false ? 0.5 : 1,
+              },
             }),
             h(
               'div',
@@ -1430,6 +1455,12 @@ window.__ModuleLoader__.load({
         '这条每轮都会追加，不按轮次省。它只干一件事：提醒 agent 必须调用 send_to_wechat，否则你收不到消息。可以改措辞，但清空就等于关掉——关掉之后它忘调工具时不会有任何提示。',
       'persona.restoreAnchor': '恢复提醒默认',
       'persona.channelLabel': '场合提示词（按轮次重发）',
+      'persona.channelHint':
+        '完整的人格与场合说明。不会每条都发，按上面的"提示词重发"轮次来；改了会立刻重发一次。关掉开关就完全不发，只留上面那条每轮提醒。',
+      'prompt.enable': '发送场合提示词',
+      'prompt.enableHint':
+        '关掉后不再追加那段长提示词，只发每轮提醒。适合你只想让它干活、不想让它演人格的时候。',
+      'prompt.enableState': '下面的长提示词与重发轮次都受这个开关控制',
       'persona.save': '保存提示词',
       'persona.restore': '恢复默认',
       'persona.hint': '追加在消息末尾；保存后下一条消息生效，不用重启。',
@@ -1559,6 +1590,12 @@ window.__ModuleLoader__.load({
         'This one is appended on every turn, never skipped. It does exactly one job: remind the agent that it must call send_to_wechat or you receive nothing. Change the wording freely, but clearing it turns it off - and then a forgotten tool call is silent.',
       'persona.restoreAnchor': 'Restore reminder',
       'persona.channelLabel': 'Channel prompt (re-sent on a schedule)',
+      'persona.channelHint':
+        'The full persona and situation note. Not sent every message - it follows the resend interval above, and an edit re-sends it once immediately. Turn the switch off and it is never sent at all, leaving only the every-turn reminder.',
+      'prompt.enable': 'Send the channel prompt',
+      'prompt.enableHint':
+        'Off means the long note is never appended, only the every-turn reminder. Useful when you want the work done without any persona.',
+      'prompt.enableState': 'This switch governs the long prompt below and its resend interval',
       'persona.save': 'Save prompt',
       'persona.restore': 'Restore default',
       'persona.hint': 'Appended after the message; saving is enough, the next turn uses it.',

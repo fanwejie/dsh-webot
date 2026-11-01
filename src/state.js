@@ -237,6 +237,9 @@ export function normalizeState(raw) {
       source.anchorPrompt === undefined
         ? ANCHOR_REMINDER
         : clampAnchor(source.anchorPrompt),
+    // Whether the long note is sent at all. The anchor is deliberately not covered by
+    // this switch: turning that off would silence the reply path itself.
+    channelPromptEnabled: source.channelPromptEnabled !== false,
     lastError:
       source.lastError && typeof source.lastError === 'object'
         ? {

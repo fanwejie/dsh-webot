@@ -161,8 +161,12 @@ any more. It goes out in two layers:
 
 | Layer | When | Size |
 | --- | --- | --- |
-| Anchor | **every turn** | 48 chars |
-| Full note | every N turns, or the moment the text changes | 1,509 chars |
+| Anchor | **every turn, no switch** | 48 chars |
+| Full note | every N turns, or when the text changes — **switchable** | 1,509 chars |
+
+`发送场合提示词` turns the full note off entirely; the anchor has no such control on
+purpose. Turning the note off costs nothing but the persona; turning the anchor off
+would silence every reply path at once, and silently.
 
 The anchor carries exactly one rule: *这轮回复要用 send_to_wechat 的 text 发出去，否则他
 收不到任何消息*. It is exempt from the schedule because in tool-only mode a turn that
