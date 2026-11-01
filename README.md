@@ -94,7 +94,7 @@ any more. It goes out in two layers:
 | Layer | When | Size |
 | --- | --- | --- |
 | Anchor | **every turn** | 48 chars |
-| Full note | every N turns, after 30 idle minutes, or the moment the text changes | 1,509 chars |
+| Full note | every N turns, or the moment the text changes | 1,509 chars |
 
 The anchor carries exactly one rule: *这轮回复要用 send_to_wechat 的 text 发出去，否则他
 收不到任何消息*. It is exempt from the schedule because in tool-only mode a turn that
@@ -102,10 +102,14 @@ misses it reaches nobody and reports no error — the one failure here with no
 recovery. Saving those 48 characters would trade a rounding error of tokens for
 silent lost messages.
 
-The full note is re-sent on three different triggers, because they cover different
-ways it is lost: the turn count (a long working session), the clock (a chat resumed
-hours later), and an edit (the user just changed it and expects it applied now).
-A restart empties the tracker in memory, so the next message re-sends it once.
+The full note is re-sent on two triggers: the turn count (a long working session,
+where the note drifts far back in the context) and an edit (the user just changed it
+and expects it applied now). A restart empties the tracker in memory, so the next
+message re-sends it once.
+
+**No idle-time trigger, on purpose.** A chat resumed hours later still has the note
+earlier in its own transcript, so counting turns loses nothing — and a clock trigger
+would fire on the one occasion the context is least likely to have dropped it.
 
 `提示词重发` in the panel sets N (default 20, 1–200; `1` restores the old
 every-turn behaviour). The log says which layer went out:

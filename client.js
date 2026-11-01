@@ -1204,7 +1204,7 @@ window.__ModuleLoader__.load({
       'merge.unit': '秒内追加的文字会跟文件一起发',
       'merge.hint': '发图/文件后等这么多秒：期间你打字就并成一条发给 agent，没打就等到点再发。填 0 = 不等，立刻发。',
       'promptRefresh.label': '提示词重发',
-      'promptRefresh.unit': '轮完整发一次（另：闲置 30 分钟也会重发）',
+      'promptRefresh.unit': '轮完整发一次',
       'promptRefresh.hint': '完整提示词不再每条都发；平时只带一句"必须调工具"的提醒。改提示词后会自动重发一次。',
       'persona.heading': '提示词',
       'persona.channelLabel': '场合提示词（每条消息都会追加）',
@@ -1293,7 +1293,7 @@ window.__ModuleLoader__.load({
       'merge.hint':
         'After a file: text you type within this window is sent together with it; silence sends the file on its own. 0 = never wait.',
       'promptRefresh.label': 'Prompt refresh',
-      'promptRefresh.unit': 'turns between full resends (also after 30 idle minutes)',
+      'promptRefresh.unit': 'turns between full resends',
       'promptRefresh.hint':
         'The full prompt is no longer sent every message; a one-line tool reminder goes out each turn. Editing the prompt triggers a resend.',
       'persona.heading': 'Prompt',

@@ -33,9 +33,6 @@ import { appendEventLog, readState, updateState } from './state.js'
 /** Longest slice of one answer sent as a single WeChat message. */
 const MAX_REPLY_CHARS = 1200
 
-/** The full note is also re-sent when this long has passed, however few turns. */
-const PROMPT_REFRESH_MS = 30 * 60 * 1000
-
 /** Pause after a poll or send failure before trying again. */
 const RETRY_MS = 1500
 
@@ -933,34 +930,36 @@ export function createChannel(options) {
   /**
    * Decide whether this turn carries the full note or only the anchor line.
    *
-   * Three triggers, because they cover different ways the text is lost: the turn
-   * count (a long working session), the clock (a chat resumed hours later), and an
-   * edit (the user just changed the prompt and expects it applied now). A restart
-   * empties the map, so the next message re-sends it once.
+   * Two triggers: the turn count (a long working session, where the note drifts far
+   * back in the context) and an edit (the user just changed it and expects it
+   * applied now). A restart empties the map, so the next message re-sends it once.
+   *
+   * There is deliberately no idle-time trigger. A chat resumed hours later still
+   * has the note earlier in its own transcript, so nothing is lost by counting
+   * turns only — and a clock trigger would re-send on the one occasion the context
+   * is least likely to have dropped it (a short conversation after a pause).
    */
   function takePromptFor(accountId, userId, promptText, state) {
     const key = `${accountId}:${userId}`
     const mark = promptMarks.get(key)
     const turns = state.promptRefreshTurns || 20
-    const now = Date.now()
 
     if (!promptText) {
-      promptMarks.set(key, { at: now, turns: 0, text: '' })
+      promptMarks.set(key, { turns: 0, text: '' })
       return ANCHOR_REMINDER
     }
 
-    const due =
-      !mark || mark.text !== promptText || mark.turns >= turns || now - mark.at >= PROMPT_REFRESH_MS
+    const due = !mark || mark.text !== promptText || mark.turns >= turns
 
     if (due) {
-      promptMarks.set(key, { at: now, turns: 0, text: promptText })
+      promptMarks.set(key, { turns: 0, text: promptText })
       // Not the anchor as well: the note states the rule in its first section, and
       // saying one thing twice is how prompts become noise.
       note('prompt', `full | ${promptText.length} chars | next in ${turns} turns`)
       return promptText
     }
 
-    promptMarks.set(key, { at: mark.at, turns: mark.turns + 1, text: mark.text })
+    promptMarks.set(key, { turns: mark.turns + 1, text: mark.text })
     note('prompt', `anchor | ${mark.turns + 1}/${turns} turns`)
     return ANCHOR_REMINDER
   }
