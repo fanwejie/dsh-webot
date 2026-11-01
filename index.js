@@ -20,7 +20,7 @@
 import path from 'node:path'
 
 import { createChannel } from './src/channel.js'
-import { roleNames } from './src/persona.js'
+import { MAX_PROMPT_CHARS } from './src/persona.js'
 import { createLoginTask } from './src/protocol/login.js'
 import { readState, stateDirectory, stateFilePath, updateState } from './src/state.js'
 
@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.10.2'
+const VERSION = '0.11.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -123,9 +123,8 @@ function readStatus() {
     approvalMode: state.approvalMode || 'phone',
     approvalTimeoutSec: state.approvalTimeoutSec || 30,
     personaMode: state.personaMode || 'chat',
-    personaRole: state.personaRole || 'dafeiyu',
-    // Cards found on disk, so the panel can offer them without a second route.
-    personaRoles: roleNames(),
+    channelPrompt: state.channelPrompt,
+    personaPrompt: state.personaPrompt,
     diagnostics: {
       statePath: stateFilePath(),
       workspace: WORKSPACE_DIRECTORY,
@@ -475,12 +474,16 @@ export function apply(ctx) {
         patch.personaMode = payload.personaMode
       }
 
-      if (payload && typeof payload.personaRole === 'string') {
-        const names = roleNames()
-        if (!names.includes(payload.personaRole)) {
-          return json({ ok: false, error: `没有这个人格：${payload.personaRole}` }, 400)
+      // Both prompt layers are free text. An empty string is stored as-is and
+      // means "off" — it is not silently replaced by the default, or the field
+      // could never be cleared.
+      for (const key of ['channelPrompt', 'personaPrompt']) {
+        if (payload && typeof payload[key] === 'string') {
+          if (payload[key].length > MAX_PROMPT_CHARS) {
+            return json({ ok: false, error: `${key} 超过 ${MAX_PROMPT_CHARS} 字` }, 400)
+          }
+          patch[key] = payload[key]
         }
-        patch.personaRole = payload.personaRole
       }
 
       if (Object.keys(patch).length === 0) {
@@ -493,8 +496,8 @@ export function apply(ctx) {
         approvalMode: next.approvalMode,
         approvalTimeoutSec: next.approvalTimeoutSec,
         personaMode: next.personaMode,
-        personaRole: next.personaRole,
-        personaRoles: roleNames(),
+        channelPrompt: next.channelPrompt,
+        personaPrompt: next.personaPrompt,
       })
     } catch (error) {
       return failure(error)

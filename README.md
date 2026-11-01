@@ -62,34 +62,53 @@ M4 fixes it in two ways:
   conversation to any of them — including one you already had — or detaches it,
   so the next message starts a fresh session inside the workspace.
 
-## Persona and register
+## Prompts and register
 
-Two registers, one conversation. Both the panel and WeChat can change them:
+Two prompt layers, **appended after the user's message**, both editable in the
+panel (and switched by command):
 
-| Panel | Command | Effect |
+| Layer | Appended in | Purpose |
 | --- | --- | --- |
-| 说话模式 | `/chat` (default) | Prepend the persona card: a chat partner, not an assistant |
-| 说话模式 | `/work` | Drop the card and prepend a one-line "工具型助手" instruction instead |
-| 人格卡 | `/role` | List the cards in `personas/` and show the current one |
-| 人格卡 | `/role <name>` | Switch cards; the next message uses it |
+| 场合提示词 `channelPrompt` | chat **and** work | Where the model is talking: a phone, no screen, no file access, send files with `send_to_wechat`, keep it short |
+| 人设提示词 `personaPrompt` | chat only | Who is speaking: tone, attitude, the one rule that tone must not cost the user information |
 
-The panel's 「人格」 section reads the same state and writes through
-`POST /api/webot/settings`; the card list comes from the Host scanning
-`personas/`, so dropping a new `.md` there makes it appear without a restart.
+`/chat` and `/work` switch the register; 说话模式 in the panel writes the same
+state. There is no `/role` any more — the persona is a text field, not a file
+catalogue.
 
-Cards are plain markdown under `personas/`. Editing the file needs no code change
-and no restart — the next message reads it. One card is capped at 8000 characters
-because it is repeated on every turn.
+### Why it is shaped this way
 
-The shipped card, `personas/dafeiyu.md`, is adapted from
+This follows `presenceNote` in
+[`dsh-wechat`](https://github.com/xcisxc29/dsh-wechat) (`packages/core/src/state.ts`,
+`packages/bundle/src/host.ts`), with one deliberate difference.
+
+Copied from it:
+
+- **A situation note, not a role-play card.** Its default text exists because
+  "without it the agent answers as if its user sits at the desktop console" — the
+  job is to say where the conversation is happening, which is exactly what a
+  location-agnostic agent cannot know.
+- **Appended, not prepended.** Its prompt is built as
+  `[user text, quoted, attachments, note]`. Trailing text sits closest to the point
+  where generation starts; a leading block reads as user background. Our first
+  version put an 1100-character persona in front of every message, and it was
+  mostly ignored — this is the fix that mattered most.
+- **`undefined` means default, `''` means off.** A cleared field stays cleared
+  instead of silently snapping back.
+
+Deliberately different: **`presenceNote` has no persona layer**, because that
+project does not try to be a companion. This one does, so the two concerns are
+split: the channel note says how to behave *here*, the persona note says who is
+*speaking*. Keeping them apart is what lets the same agent hold a tone and still
+call tools — a single card saying "don't be an assistant, don't list steps" fights
+the tools it is required to use.
+
+The default persona text is a trimmed adaptation of
 [`chennianlaobai/qq-ai-bot` → `persona.md`](https://github.com/chennianlaobai/qq-ai-bot/blob/main/persona.md)
-(MIT, © chennianlaobai). It is **not** a verbatim copy: the original is written for
-a QQ group, so the group framing, the `昵称: 内容` transcript convention, the `@`
-convention and the whole `[表情:xxx]` section were removed — this channel is a
-one-to-one WeChat chat and cannot send custom stickers, so those instructions
-would only produce literal text. The tone is unchanged. The file's header comment
-records the source and the changes; `readRole` strips that comment before
-injection.
+(MIT, © chennianlaobai). `personas/dafeiyu.md` keeps the longer source version for
+reference; it is no longer injected.
+
+Both layers are capped at 3000 characters: they ride on every turn.
 
 ### Reply bubbles
 

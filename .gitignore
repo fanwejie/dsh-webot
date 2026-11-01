@@ -1,6 +1,11 @@
 # Local scratch output — extracted DSH bundles, logs, ad-hoc probes.
 .scratch/
 
+# Third-party source read for reference only (MIT, not ours). Kept out of the
+# repository: vendoring someone else's tree under our root would imply it is part
+# of this package, and it is 32k lines plus a 4 MB archive.
+参考/
+
 # Dependencies and build output, when this package grows a build step.
 node_modules/
 dist/

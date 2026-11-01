@@ -1,86 +1,64 @@
 /**
- * Persona cards: one markdown file per role, injected ahead of the user message.
+ * Two prompt layers appended to the end of every WeChat message.
  *
- * A card is a normal file under `personas/`, so editing it needs no code change —
- * the next message picks it up. Cards are capped: a persona is repeated on every
- * turn, and an unbounded file would quietly become the largest thing in the
- * context window.
+ * Modelled on `presenceNote` in `dsh-wechat` (packages/core/src/state.ts), which
+ * taught two things worth copying and one worth changing:
  *
- * ## Why the card rides the prompt instead of the system prompt
- *
- * The right home for this is a prompt section registered on the *agent's* own
- * context, so it is scoped to WeChat sessions and costs nothing to repeat.
- * `systemPrompt.section()` is global to the calling context, and this plugin's
- * context is the root — registering there would put the persona in front of
- * every session in DSH, including the ones you drive at the desk. Scoping it
- * needs the agent context handed out by `agent/created`, which is a larger change
- * than the first version of this feature needs. Prepending is isolated to this
- * channel by construction, and an identical prefix still hits the cache.
+ * - it is a **situation note**, not a role-play card: it says where the model is
+ *   talking (a phone, no screen), what it may not assume, and how to hand a file
+ *   over. That is what stops an agent answering as if its user sits at the desk.
+ * - it is **appended, not prepended** (`host.ts` builds `[prompt, quoted,
+ *   attachments, presenceNote]`). Trailing text sits closest to generation, and a
+ *   leading block reads as user background instead of as instruction.
+ * - what it does not have is a persona layer. Splitting the two here is the
+ *   difference between "how to behave on this channel" and "who is speaking", and
+ *   keeping them separate is what lets the agent hold a tone *and* get work done —
+ *   a card that says "don't be an assistant" fights the tools it must call.
  *
  * @module dsh-webot/persona
  */
 
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-/** Default role when none is configured. */
-export const DEFAULT_ROLE = 'dafeiyu'
-
-/** Hard cap on one card, in characters. */
-const MAX_ROLE_CHARS = 8000
+/** Cap per layer: these are repeated on every turn. */
+export const MAX_PROMPT_CHARS = 3000
 
 /**
- * What replaces the card in work mode.
+ * Always appended, in both registers.
  *
- * Not an empty string: silence would leave whatever the previous turns set up,
- * and the point of the switch is a deliberate change of register.
+ * Kept short on purpose. The model already knows how to be an agent; what it
+ * cannot know is that its user is on a phone.
  */
-export const WORK_PREFIX = [
-  '【干活模式】这一轮按工具型助手来：简洁、准确，先给结论和要做的步骤，',
-  '不用人设语气、不用颜文字。需要确认的地方直接问，不要猜。',
+export const DEFAULT_CHANNEL_PROMPT = [
+  '[渠道：微信] 你在和微信上的用户对话，对方在手机上，看不到这台电脑的屏幕，也没法自己打开文件。',
+  '不要让他去"打开某个路径"或"看某个文件"。要给他看东西时，用 send_to_wechat 直接发：',
+  '图片和视频会显示成照片/视频，其他文件作为附件发过去。回复别太长，适合手机阅读。',
 ].join('')
 
-function roleDirectory() {
-  return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'personas')
-}
+/**
+ * Appended only in chat mode.
+ *
+ * Deliberately contains no instruction that contradicts the agent's job: no
+ * "don't be an assistant", no "never list steps". Tone only, plus the one rule
+ * that keeps the tone from costing the user information.
+ */
+export const DEFAULT_PERSONA_PROMPT = [
+  '你叫鲸鱼娘。说话短、有脾气，不讨好也不装客气；能接梗、能怼回去，但不用脏话、不人身攻击。',
+  '卖萌点到为止，别每句都来。干活时先把事办好再贫；报错、改了哪个文件、要他决定什么，都要说清楚。',
+  '有人叫你"大肥鱼"就炸毛。',
+].join('')
 
-/** Role names available on disk, without the extension. */
-export function roleNames() {
-  try {
-    return fs
-      .readdirSync(roleDirectory())
-      .filter((name) => name.toLowerCase().endsWith('.md'))
-      .map((name) => name.slice(0, -3))
-      .sort()
-  } catch {
-    return []
-  }
-}
-
-/** One role card, or '' when the file is missing or unreadable. */
-export function readRole(name) {
-  const safe = String(name || '')
-    .replace(/[^\w\u4e00-\u9fa5-]/g, '')
-    .slice(0, 64)
-  if (!safe) return ''
-  try {
-    const raw = fs.readFileSync(path.join(roleDirectory(), `${safe}.md`), 'utf8')
-    // A card may open with an HTML comment carrying its source, licence and what
-    // was changed. That belongs to the reader of the file, not to the model.
-    const body = raw.replace(/^\s*<!--[\s\S]*?-->\s*/, '')
-    return body.trim().slice(0, MAX_ROLE_CHARS)
-  } catch {
-    return ''
-  }
+function clamp(value) {
+  const text = String(value === undefined || value === null ? '' : value).trim()
+  return text ? text.slice(0, MAX_PROMPT_CHARS) : ''
 }
 
 /**
- * Text to place ahead of one inbound message.
+ * The text to append after this turn's content.
  *
- * @returns '' when there is nothing to say, so callers can skip the join.
+ * @param options.mode - `chat` includes the persona layer, `work` does not.
+ * @returns '' when both layers are empty, so the caller can skip the join.
  */
-export function personaPrefix({ mode, role }) {
-  if (mode === 'work') return WORK_PREFIX
-  return readRole(role || DEFAULT_ROLE)
+export function composeTail({ mode, channelPrompt, personaPrompt }) {
+  const channel = clamp(channelPrompt)
+  const persona = mode === 'work' ? '' : clamp(personaPrompt)
+  return [channel, persona].filter((part) => part !== '').join('\n\n')
 }

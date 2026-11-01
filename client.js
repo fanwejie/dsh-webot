@@ -237,6 +237,22 @@ window.__ModuleLoader__.load({
       lineHeight: '18px',
     }
 
+    /** Multi-line editor for the two prompt layers. */
+    const TEXTAREA = {
+      boxSizing: 'border-box',
+      width: '100%',
+      maxWidth: '560px',
+      padding: '8px',
+      borderRadius: 'var(--dsw-radius-sm)',
+      border: '0.5px solid var(--dsw-alias-border-l3)',
+      background: 'var(--dsw-alias-bg-base)',
+      color: 'var(--dsw-alias-label-primary)',
+      fontFamily: 'inherit',
+      fontSize: '12px',
+      lineHeight: '18px',
+      resize: 'vertical',
+    }
+
     const MUTED = {
       margin: '4px 0 0',
       fontSize: '12px',
@@ -446,6 +462,29 @@ window.__ModuleLoader__.load({
               return
             }
             setPicker(false)
+            refreshStatus()
+          })
+          .catch((error) => setBindError((error && error.message) || String(error)))
+      }
+
+      /** Drafts for the two prompt layers: null means "showing the saved value". */
+      const [draftChannel, setDraftChannel] = React.useState(null)
+      const [draftPersona, setDraftPersona] = React.useState(null)
+
+      function savePrompts() {
+        const patch = {}
+        if (draftChannel !== null) patch.channelPrompt = draftChannel
+        if (draftPersona !== null) patch.personaPrompt = draftPersona
+        if (Object.keys(patch).length === 0) return
+        setBindError('')
+        post(SETTINGS_URL, patch)
+          .then((body) => {
+            if (!body || body.ok !== true) {
+              setBindError((body && body.error) || t('bind.failed'))
+              return
+            }
+            setDraftChannel(null)
+            setDraftPersona(null)
             refreshStatus()
           })
           .catch((error) => setBindError((error && error.message) || String(error)))
@@ -730,24 +769,33 @@ window.__ModuleLoader__.load({
                 h('option', { value: 'work' }, t('persona.work')),
               ),
             ),
+            h('p', { style: { ...MUTED, marginTop: '10px' } }, t('persona.channelLabel')),
+            h('textarea', {
+              value: draftChannel === null ? String(status.data.channelPrompt || '') : draftChannel,
+              onChange: (event) => setDraftChannel(event.target.value),
+              rows: 4,
+              'aria-label': t('persona.channelLabel'),
+              style: TEXTAREA,
+            }),
+            h('p', { style: { ...MUTED, marginTop: '10px' } }, t('persona.personaLabel')),
+            h('textarea', {
+              value: draftPersona === null ? String(status.data.personaPrompt || '') : draftPersona,
+              onChange: (event) => setDraftPersona(event.target.value),
+              rows: 4,
+              'aria-label': t('persona.personaLabel'),
+              style: TEXTAREA,
+            }),
             h(
               'div',
-              { style: { ...FIELD_ROW, alignItems: 'center' } },
-              h('span', { style: FIELD_NAME }, t('persona.role')),
-              h(
-                'select',
-                {
-                  value: status.data.personaRole || '',
-                  onChange: (event) => postSettings({ personaRole: event.target.value }),
-                  'aria-label': t('persona.role'),
-                  style: SELECT,
-                },
-                (status.data.personaRoles || []).map((name) =>
-                  h('option', { key: name, value: name }, String(name)),
-                ),
-              ),
+              { style: { marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center' } },
+              h(Btn, {
+                label: t('persona.save'),
+                onClick: savePrompts,
+                variant: 'primary',
+                disabled: draftChannel === null && draftPersona === null,
+              }),
+              h('span', { style: { ...MUTED, margin: 0 } }, t('persona.hint')),
             ),
-            h('p', { style: MUTED }, t('persona.hint')),
           ),
           h('p', { style: MUTED }, t('bind.commands')),
           h('div', { style: { marginTop: '12px', display: 'flex', gap: '8px' } },
@@ -1058,12 +1106,14 @@ window.__ModuleLoader__.load({
         '两者不能同时生效：请求只有一个归属，如果两边都开，输的那一边会在界面上留下一个关不掉的弹窗——宿主没有撤回接口。',
       'approval.timeout': '超时',
       'approval.timeoutUnit': '秒（5–300）内没回复就自动拒绝',
-      'persona.heading': '人格',
+      'persona.heading': '提示词与人设',
       'persona.mode': '说话模式',
-      'persona.chat': '聊天（套人格卡）',
-      'persona.work': '干活（不套人格）',
-      'persona.role': '人格卡',
-      'persona.hint': '人格卡是 personas/ 目录下的 .md 文件，改完存盘，下一条消息就生效，不用重启。',
+      'persona.chat': '聊天（带人设）',
+      'persona.work': '干活（不套人设）',
+      'persona.channelLabel': '场合提示词（两种模式都会追加）',
+      'persona.personaLabel': '人设提示词（仅聊天模式追加）',
+      'persona.save': '保存提示词',
+      'persona.hint': '追加在消息末尾；保存后下一条消息生效，不用重启。',
       'login.phase.idle': '准备中',
       'login.phase.starting': '正在获取二维码',
       'login.phase.waiting': '等待扫码',
@@ -1141,13 +1191,14 @@ window.__ModuleLoader__.load({
         'These cannot both be on. A request has exactly one owner, and if both sides are started the loser leaves a dialog on screen that nothing can close — the host has no withdraw call.',
       'approval.timeout': 'Timeout',
       'approval.timeoutUnit': 'seconds (5–300) before an automatic reject',
-      'persona.heading': 'Persona',
+      'persona.heading': 'Prompts and persona',
       'persona.mode': 'Register',
-      'persona.chat': 'Chat (persona card)',
+      'persona.chat': 'Chat (with persona)',
       'persona.work': 'Work (no persona)',
-      'persona.role': 'Card',
-      'persona.hint':
-        'Cards are .md files under personas/. Saving one is enough: the next message uses it, no restart.',
+      'persona.channelLabel': 'Channel prompt (appended in both registers)',
+      'persona.personaLabel': 'Persona prompt (appended in chat only)',
+      'persona.save': 'Save prompts',
+      'persona.hint': 'Appended after the message; saving is enough, the next turn uses it.',
       'login.phase.idle': 'Preparing',
       'login.phase.starting': 'Fetching the QR code',
       'login.phase.waiting': 'Waiting for a scan',

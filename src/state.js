@@ -25,6 +25,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
+import { DEFAULT_CHANNEL_PROMPT, DEFAULT_PERSONA_PROMPT, MAX_PROMPT_CHARS } from './persona.js'
+
 const STATE_VERSION = 1
 const MAX_ACCOUNTS = 5
 
@@ -48,6 +50,11 @@ function clampTimeout(value) {
   const seconds = Number(value)
   if (!Number.isFinite(seconds)) return DEFAULT_APPROVAL_TIMEOUT_SEC
   return Math.min(MAX_APPROVAL_TIMEOUT_SEC, Math.max(MIN_APPROVAL_TIMEOUT_SEC, Math.round(seconds)))
+}
+
+/** Trim and cap one prompt layer. An empty string stays empty — that means "off". */
+function clampPrompt(value) {
+  return typeof value === 'string' ? value.trim().slice(0, MAX_PROMPT_CHARS) : ''
 }
 
 /** Directory that owns the state file. */
@@ -133,11 +140,20 @@ export function normalizeState(raw) {
     // permission prompt blocks the agent turn, so an unanswered one is a stalled
     // machine; refusing is the safe default and the user can always re-ask.
     approvalTimeoutSec: clampTimeout(source.approvalTimeoutSec),
-    // Which register the channel talks in. `chat` prepends a persona card;
-    // `work` swaps it for a one-line "工具型助手" instruction. Per conversation
-    // state would be nicer, but there is exactly one conversation per account.
+    // Which register the channel talks in. `chat` appends the persona layer,
+    // `work` appends only the channel layer.
     personaMode: source.personaMode === 'work' ? 'work' : 'chat',
-    personaRole: text(source.personaRole, 64) || 'dafeiyu',
+    // `undefined` means "never set", which takes the default; an empty string is
+    // a deliberate "off" and stays empty, the same distinction the reference makes
+    // with `stored.presenceNote ?? DEFAULT_SETTINGS.presenceNote`.
+    channelPrompt:
+      source.channelPrompt === undefined
+        ? DEFAULT_CHANNEL_PROMPT
+        : clampPrompt(source.channelPrompt),
+    personaPrompt:
+      source.personaPrompt === undefined
+        ? DEFAULT_PERSONA_PROMPT
+        : clampPrompt(source.personaPrompt),
     lastError:
       source.lastError && typeof source.lastError === 'object'
         ? {
