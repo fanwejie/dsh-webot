@@ -41,6 +41,23 @@ function clampMergeSeconds(value) {
 }
 
 /**
+ * How many turns may pass before the full prompt is re-sent.
+ *
+ * The prompt is ~1.5k characters and used to ride on every message. It is now sent
+ * when it is likely to be needed instead: every N turns, after a long gap, or as
+ * soon as the text is edited. A short anchor always goes out, because the rule it
+ * carries has no recovery if it is missed.
+ */
+const DEFAULT_PROMPT_REFRESH_TURNS = 20
+const MAX_PROMPT_REFRESH_TURNS = 200
+
+function clampRefreshTurns(value) {
+  const turns = Number(value)
+  if (!Number.isFinite(turns)) return DEFAULT_PROMPT_REFRESH_TURNS
+  return Math.min(MAX_PROMPT_REFRESH_TURNS, Math.max(1, Math.round(turns)))
+}
+
+/**
  * Accepted values of `approvalMode`.
  *
  * There is deliberately no "both". A permission request is a waterfall with one
@@ -167,6 +184,8 @@ export function normalizeState(raw) {
     approvalTimeoutSec: clampTimeout(source.approvalTimeoutSec),
     // How long an inbound file waits for the sentence that explains it.
     mediaMergeSec: clampMergeSeconds(source.mediaMergeSec),
+    // Turns between full-prompt resends; 1 means "every turn", as before.
+    promptRefreshTurns: clampRefreshTurns(source.promptRefreshTurns),
     // `undefined` means "never set", which takes the default; an empty string is
     // a deliberate "off" and stays empty, the same distinction the reference makes
     // with `stored.presenceNote ?? DEFAULT_SETTINGS.presenceNote`.

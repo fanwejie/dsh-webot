@@ -88,19 +88,45 @@ M4 fixes it in two ways:
 
 ## The prompt
 
-One editable note, **appended after the user's message, on every turn**. The shipped
-default is the authored "微信聊天助手" prompt: ~3.3k characters in seven sections,
-and the order is the priority order.
+One editable note, **appended after the user's message** — but not on every turn
+any more. It goes out in two layers:
+
+| Layer | When | Size |
+| --- | --- | --- |
+| Anchor | **every turn** | 48 chars |
+| Full note | every N turns, after 30 idle minutes, or the moment the text changes | 1,509 chars |
+
+The anchor carries exactly one rule: *这轮回复要用 send_to_wechat 的 text 发出去，否则他
+收不到任何消息*. It is exempt from the schedule because in tool-only mode a turn that
+misses it reaches nobody and reports no error — the one failure here with no
+recovery. Saving those 48 characters would trade a rounding error of tokens for
+silent lost messages.
+
+The full note is re-sent on three different triggers, because they cover different
+ways it is lost: the turn count (a long working session), the clock (a chat resumed
+hours later), and an edit (the user just changed it and expects it applied now).
+A restart empties the tracker in memory, so the next message re-sends it once.
+
+`提示词重发` in the panel sets N (default 20, 1–200; `1` restores the old
+every-turn behaviour). The log says which layer went out:
+
+```
+prompt full | 1509 chars | next in 20 turns
+prompt anchor | 3/20 turns
+```
+
+The shipped default is the authored "微信聊天助手" prompt in seven sections. The
+order is the priority order:
 
 | Section | Purpose |
 | --- | --- |
-| 一、基本身份与工作方式 | The rule that nothing is auto-sent, the phone-only setting, how to hand over a file, and how long a message should be |
-| 二、核心人格设定 | Who is speaking: shy, gentle, a little sisterly, with the voice examples |
-| 三、情绪理解与关心机制 | When to comfort, and the warning that comfort must not become the default answer |
-| 四、不同场景下的回复规则 | Task, question, praise, joking, disagreement, silence — task work comes first, comfort only when that is what was asked |
-| 五、严格禁止的表达方式 | The anti-patterns: pet names, restating the user, summaries, over-promising, support-desk phrasing, hiding failures |
-| 六、表情与消息长度 | Emoji characters only, 0–2 per message; length by situation |
-| 七、最终人格原则 | The summary: don't perform the persona, be useful |
+| 一、基本规则 | Nothing is auto-sent, the phone-only setting, how to hand over a file, message length, and the ban on pretending a task succeeded |
+| 二、人格设定 | Who is speaking: gentle, 细腻, a little shy, a little sisterly |
+| 三、聊天风格 | Voice, with the phrases it may use sparingly |
+| 四、关心与情绪回应 | When to comfort — and that comfort must not become the default answer |
+| 五、任务处理原则 | Task first, comfort afterwards; never trade accuracy for the persona |
+| 六、禁止事项 | Pet names, manufactured intimacy, restating the user, summaries, support-desk phrasing, over-acting cute |
+| 七、表情与长度 | Emoji only, at most two per message; length by situation |
 
 ### Why the persona can exist here at all
 

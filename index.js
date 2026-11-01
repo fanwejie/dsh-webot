@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.18.0'
+const VERSION = '0.19.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -123,6 +123,7 @@ function readStatus() {
     approvalMode: state.approvalMode || 'phone',
     approvalTimeoutSec: state.approvalTimeoutSec || 30,
     mediaMergeSec: state.mediaMergeSec,
+    promptRefreshTurns: state.promptRefreshTurns,
     channelPrompt: state.channelPrompt,
     // Shipped default, so the panel can offer "restore" without a second route.
     // Without this, a saved prompt would keep overriding an improved default
@@ -502,6 +503,14 @@ export function apply(ctx) {
         patch.approvalTimeoutSec = Math.round(seconds)
       }
 
+      if (payload && payload.promptRefreshTurns !== undefined) {
+        const turns = Number(payload.promptRefreshTurns)
+        if (!Number.isFinite(turns) || turns < 1 || turns > 200) {
+          return json({ ok: false, error: 'promptRefreshTurns 需在 1–200 之间' }, 400)
+        }
+        patch.promptRefreshTurns = Math.round(turns)
+      }
+
       if (payload && payload.mediaMergeSec !== undefined) {
         const seconds = Number(payload.mediaMergeSec)
         if (!Number.isFinite(seconds) || seconds < 0 || seconds > 300) {
@@ -530,6 +539,7 @@ export function apply(ctx) {
         approvalMode: next.approvalMode,
         approvalTimeoutSec: next.approvalTimeoutSec,
         mediaMergeSec: next.mediaMergeSec,
+        promptRefreshTurns: next.promptRefreshTurns,
         channelPrompt: next.channelPrompt,
       })
     } catch (error) {

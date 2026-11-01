@@ -27,11 +27,14 @@ import path from 'node:path'
 import { MESSAGE_TYPE_USER, getUpdates, sendText } from './protocol/messages.js'
 import { downloadMedia, extensionForName } from './protocol/media.js'
 import { sendMediaToWeChat } from './protocol/outbound-media.js'
-import { composeTail } from './persona.js'
+import { ANCHOR_REMINDER, composeTail } from './persona.js'
 import { appendEventLog, readState, updateState } from './state.js'
 
 /** Longest slice of one answer sent as a single WeChat message. */
 const MAX_REPLY_CHARS = 1200
+
+/** The full note is also re-sent when this long has passed, however few turns. */
+const PROMPT_REFRESH_MS = 30 * 60 * 1000
 
 /** Pause after a poll or send failure before trying again. */
 const RETRY_MS = 1500
@@ -388,6 +391,14 @@ export function createChannel(options) {
    * mean one thing.
    */
   const pendingQuestions = new Map()
+  /**
+   * conversationKey -> when the full prompt last went out.
+   *
+   * In memory on purpose: a restart should re-send the note once, which is what an
+   * empty map does. Persisting it would suppress the reminder exactly when the
+   * process — and its context — just came back.
+   */
+  const promptMarks = new Map()
   /**
    * sessionId -> sends made through `send_to_wechat` during the current turn.
    *
@@ -879,11 +890,16 @@ export function createChannel(options) {
       return
     }
 
-    // The prompt layers go after this turn's content, not before it: a leading
-    // block reads as user background, while trailing text sits closest to the
-    // point where the model starts writing.
+    // The prompt goes after this turn's content, not before it: a leading block
+    // reads as user background, while trailing text sits closest to the point where
+    // the model starts writing.
+    //
+    // Two layers. The full note is ~1.5k characters and is re-sent only when it is
+    // likely to be needed; the anchor line goes out every turn regardless, because
+    // the rule it carries is the one failure with no recovery.
     const state = readState()
-    const tail = composeTail({ channelPrompt: state.channelPrompt })
+    const promptText = composeTail({ channelPrompt: state.channelPrompt })
+    const tail = takePromptFor(account.accountId, userId, promptText, state)
     const body = tail ? `${content}\n\n${tail}` : content
 
     // Steer first: a message sent while the agent is working is an interruption,
@@ -914,9 +930,43 @@ export function createChannel(options) {
     clearError(account.accountId)
   }
 
+  /**
+   * Decide whether this turn carries the full note or only the anchor line.
+   *
+   * Three triggers, because they cover different ways the text is lost: the turn
+   * count (a long working session), the clock (a chat resumed hours later), and an
+   * edit (the user just changed the prompt and expects it applied now). A restart
+   * empties the map, so the next message re-sends it once.
+   */
+  function takePromptFor(accountId, userId, promptText, state) {
+    const key = `${accountId}:${userId}`
+    const mark = promptMarks.get(key)
+    const turns = state.promptRefreshTurns || 20
+    const now = Date.now()
+
+    if (!promptText) {
+      promptMarks.set(key, { at: now, turns: 0, text: '' })
+      return ANCHOR_REMINDER
+    }
+
+    const due =
+      !mark || mark.text !== promptText || mark.turns >= turns || now - mark.at >= PROMPT_REFRESH_MS
+
+    if (due) {
+      promptMarks.set(key, { at: now, turns: 0, text: promptText })
+      // Not the anchor as well: the note states the rule in its first section, and
+      // saying one thing twice is how prompts become noise.
+      note('prompt', `full | ${promptText.length} chars | next in ${turns} turns`)
+      return promptText
+    }
+
+    promptMarks.set(key, { at: mark.at, turns: mark.turns + 1, text: mark.text })
+    note('prompt', `anchor | ${mark.turns + 1}/${turns} turns`)
+    return ANCHOR_REMINDER
+  }
+
   /** Hold a file (and any text that came with it) until the window closes. */
-  function queueContent(key, { account, userId, contextToken, text, mediaItems, signal, mergeMs }) {
-    let held = contentBuffers.get(key)
+  function queueContent(key, { account, userId, contextToken, text, mediaItems, signal, mergeMs }) {    let held = contentBuffers.get(key)
     if (!held) {
       held = {
         account,
@@ -1352,8 +1402,7 @@ export function createChannel(options) {
     return { sent: true, chars: body.length }
   }
   /** Where an outbound send goes: this session's conversation, else the bound one. */
-  function resolveOutboundTarget(sessionId) {
-    const direct = targetForSession(sessionId)
+  function resolveOutboundTarget(sessionId) {    const direct = targetForSession(sessionId)
     const target = direct || boundConversationTarget()
     if (!target) throw new Error('这台机器还没绑定微信，发不出去')
     return { ...target, crossSession: !direct }
@@ -1459,6 +1508,8 @@ export function createChannel(options) {
     pendingApprovals.clear()
     for (const entry of [...pendingQuestions.values()]) entry.finish({ answers: [] })
     pendingQuestions.clear()
+    // Forget the schedule: a fresh row should introduce itself again.
+    promptMarks.clear()
     // A held file would otherwise be dropped in silence when the row unloads. It is
     // delivered now, without waiting for a window that will never expire.
     for (const key of [...contentBuffers.keys()]) void deliverBuffered(key, '')

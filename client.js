@@ -432,6 +432,39 @@ window.__ModuleLoader__.load({
       const [sessions, setSessions] = React.useState({ phase: 'idle' })
       const [bindError, setBindError] = React.useState('')
       const [mergeDraft, setMergeDraft] = React.useState(null)
+      const [refreshDraft, setRefreshDraft] = React.useState(null)
+
+      /** Commit the prompt-refresh draft; same contract as the other number fields. */
+      function commitRefresh() {
+        if (refreshDraft === null) return
+        const raw = String(refreshDraft).trim()
+        if (raw === '') {
+          setRefreshDraft(null)
+          return
+        }
+        const turns = Number(raw)
+        if (!Number.isFinite(turns)) {
+          setRefreshDraft(null)
+          return
+        }
+        const clamped = Math.min(200, Math.max(1, Math.round(turns)))
+        setRefreshDraft(String(clamped))
+        setBindError('')
+        post(SETTINGS_URL, { promptRefreshTurns: clamped })
+          .then((body) => {
+            if (!body || body.ok !== true) {
+              setBindError((body && body.error) || t('bind.failed'))
+              setRefreshDraft(null)
+              return
+            }
+            refreshStatus()
+            setRefreshDraft(null)
+          })
+          .catch((error) => {
+            setBindError((error && error.message) || String(error))
+            setRefreshDraft(null)
+          })
+      }
 
       /** Commit the merge-window draft; same contract as the timeout field. */
       function commitMerge() {
@@ -795,6 +828,32 @@ window.__ModuleLoader__.load({
             h('span', { style: { ...MUTED, margin: 0 } }, t('merge.unit')),
           ),
           h('p', { style: MUTED }, t('merge.hint')),
+          h(
+            'div',
+            { style: { ...FIELD_ROW, alignItems: 'center' } },
+            h('span', { style: FIELD_NAME }, t('promptRefresh.label')),
+            h('input', {
+              type: 'number',
+              min: 1,
+              max: 200,
+              value:
+                refreshDraft === null
+                  ? String(status.data.promptRefreshTurns ?? 20)
+                  : refreshDraft,
+              onChange: (event) => setRefreshDraft(event.target.value),
+              onBlur: commitRefresh,
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  event.currentTarget.blur()
+                }
+              },
+              'aria-label': t('promptRefresh.label'),
+              style: { ...TEXT_INPUT, width: '80px', letterSpacing: 'normal' },
+            }),
+            h('span', { style: { ...MUTED, margin: 0 } }, t('promptRefresh.unit')),
+          ),
+          h('p', { style: MUTED }, t('promptRefresh.hint')),
           h('p', { style: MUTED }, t('approval.hint')),
           h(
             'div',
@@ -1144,6 +1203,9 @@ window.__ModuleLoader__.load({
       'merge.label': '文件合并',
       'merge.unit': '秒内追加的文字会跟文件一起发',
       'merge.hint': '发图/文件后等这么多秒：期间你打字就并成一条发给 agent，没打就等到点再发。填 0 = 不等，立刻发。',
+      'promptRefresh.label': '提示词重发',
+      'promptRefresh.unit': '轮完整发一次（另：闲置 30 分钟也会重发）',
+      'promptRefresh.hint': '完整提示词不再每条都发；平时只带一句"必须调工具"的提醒。改提示词后会自动重发一次。',
       'persona.heading': '提示词',
       'persona.channelLabel': '场合提示词（每条消息都会追加）',
       'persona.save': '保存提示词',
@@ -1230,6 +1292,10 @@ window.__ModuleLoader__.load({
       'merge.unit': 'seconds to wait for your follow-up text',
       'merge.hint':
         'After a file: text you type within this window is sent together with it; silence sends the file on its own. 0 = never wait.',
+      'promptRefresh.label': 'Prompt refresh',
+      'promptRefresh.unit': 'turns between full resends (also after 30 idle minutes)',
+      'promptRefresh.hint':
+        'The full prompt is no longer sent every message; a one-line tool reminder goes out each turn. Editing the prompt triggers a resend.',
       'persona.heading': 'Prompt',
       'persona.channelLabel': 'Channel prompt (appended to every message)',
       'persona.save': 'Save prompt',
