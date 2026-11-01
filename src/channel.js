@@ -413,6 +413,23 @@ export function createChannel(options) {
 
     const relative = path.relative(cwd, target).split(path.sep).join('/')
     note('media', `${label} | ${buffer.length} bytes | ${relative}`)
+
+    // A voice note is the one media type with two independent paths to meaning:
+    // the service's transcription, and the SILK payload. SILK needs a decoder
+    // nothing here has, so the transcript is what actually gets heard — and when
+    // it is missing, saying "saved to <path>" alone is a lie the agent cannot
+    // recover from: it will try to open a .silk file and fail.
+    if (item.type === 3) {
+      const transcript =
+        payload && typeof payload.text === 'string' ? payload.text.trim() : ''
+      if (transcript) {
+        note('voice', `transcript ${transcript.length} chars | ${transcript.slice(0, 40)}`)
+        return ''
+      }
+      note('voice', 'no transcript in payload')
+      return `[微信语音] 已保存到 ${relative}（${buffer.length} 字节），但这条语音没有附带转写文字，内容无法识别。`
+    }
+
     return `[微信${label}] 已保存到 ${relative}（${buffer.length} 字节）`
   }
 
