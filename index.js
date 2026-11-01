@@ -31,7 +31,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.6.0'
+const VERSION = '0.6.1'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -119,6 +119,7 @@ function readStatus() {
     errors: [...live.errors, ...(state.lastError ? [state.lastError.message] : [])],
     conversationKey: conversationKeyFor(state),
     binding: readBinding(state),
+    approvalMode: state.approvalMode || 'both',
     diagnostics: {
       statePath: stateFilePath(),
       workspace: WORKSPACE_DIRECTORY,
@@ -362,6 +363,20 @@ export function apply(ctx) {
       }
       updateState({ bindings })
       return json({ ok: true, binding: readBinding(readState()) })
+    } catch (error) {
+      return failure(error)
+    }
+  })
+
+  register('/api/webot/settings', ['POST'], async (request) => {
+    try {
+      const payload = await request.json().catch(() => ({}))
+      const mode = typeof payload?.approvalMode === 'string' ? payload.approvalMode : ''
+      if (!['both', 'phone', 'desktop'].includes(mode)) {
+        return json({ ok: false, error: 'approvalMode 只能是 both / phone / desktop' }, 400)
+      }
+      updateState({ approvalMode: mode })
+      return json({ ok: true, approvalMode: mode })
     } catch (error) {
       return failure(error)
     }

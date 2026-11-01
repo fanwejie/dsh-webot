@@ -113,6 +113,23 @@ request went away), and unloading the plugin resolves every open prompt as
 One prompt per conversation: a second simultaneous request delegates instead of
 stacking, which is what keeps a bare `1` unambiguous.
 
+**Which side sees the prompt is a setting**, `approvalMode` in the panel:
+
+| Mode | Behaviour |
+| --- | --- |
+| `both` (default) | The desktop answerer starts and the WeChat message is sent; the first answer wins |
+| `phone` | Only WeChat; the desk never sees the request |
+| `desktop` | Only the desk; the channel delegates and sends nothing |
+
+Both exclusive modes were shipped for one round each, and each one made the other
+side look broken — from that side the prompt genuinely is missing, because a
+waterfall has exactly one winner. `both` is the only mode where neither side can
+report a prompt as lost.
+
+One consequence of `both`: if the desk answers first, the WeChat message stays on
+the phone unanswered, and a later `1` is no longer a pending decision — it reaches
+the agent as ordinary text. That is the price of racing.
+
 ## Layout
 
 | File | Role |

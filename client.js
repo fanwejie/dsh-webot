@@ -40,6 +40,7 @@ window.__ModuleLoader__.load({
     const LOGIN_CANCEL_URL = '/api/webot/login/cancel'
     const SESSIONS_URL = '/api/webot/sessions'
     const BIND_URL = '/api/webot/bind'
+    const SETTINGS_URL = '/api/webot/settings'
     const TITLE_ID = 'webot-panel-title'
 
     /* ------------------------------------------------------------------ *
@@ -219,6 +220,21 @@ window.__ModuleLoader__.load({
       fontSize: '12px',
       lineHeight: '18px',
       letterSpacing: '2px',
+    }
+
+    /** Native select, sized like the host's small inputs. */
+    const SELECT = {
+      boxSizing: 'border-box',
+      height: '28px',
+      maxWidth: '260px',
+      padding: '0 8px',
+      borderRadius: 'var(--dsw-radius-sm)',
+      border: '0.5px solid var(--dsw-alias-border-l3)',
+      background: 'var(--dsw-alias-bg-base)',
+      color: 'var(--dsw-alias-label-primary)',
+      fontFamily: 'inherit',
+      fontSize: '12px',
+      lineHeight: '18px',
     }
 
     const MUTED = {
@@ -430,6 +446,19 @@ window.__ModuleLoader__.load({
           .catch((error) => setBindError((error && error.message) || String(error)))
       }
 
+      function setApprovalMode(mode) {
+        setBindError('')
+        post(SETTINGS_URL, { approvalMode: mode })
+          .then((body) => {
+            if (!body || body.ok !== true) {
+              setBindError((body && body.error) || t('bind.failed'))
+              return
+            }
+            refreshStatus()
+          })
+          .catch((error) => setBindError((error && error.message) || String(error)))
+      }
+
       function renderPicker() {
         if (sessions.phase === 'loading') return h('p', { style: MUTED }, t('bind.loading'))
         if (sessions.phase === 'error') {
@@ -565,6 +594,24 @@ window.__ModuleLoader__.load({
               ? h('p', { style: { ...MUTED, color: 'var(--dsw-alias-state-error-primary)' } }, bindError)
               : null,
           ),
+          h(
+            'div',
+            { style: { ...FIELD_ROW, alignItems: 'center', marginTop: '10px' } },
+            h('span', { style: FIELD_NAME }, t('approval.mode')),
+            h(
+              'select',
+              {
+                value: status.data.approvalMode || 'both',
+                onChange: (event) => setApprovalMode(event.target.value),
+                'aria-label': t('approval.mode'),
+                style: SELECT,
+              },
+              h('option', { value: 'both' }, t('approval.both')),
+              h('option', { value: 'phone' }, t('approval.phone')),
+              h('option', { value: 'desktop' }, t('approval.desktop')),
+            ),
+          ),
+          h('p', { style: MUTED }, t('approval.hint')),
           h('p', { style: MUTED }, t('bind.commands')),
           h('div', { style: { marginTop: '12px', display: 'flex', gap: '8px' } },
             h(Btn, {
@@ -867,6 +914,11 @@ window.__ModuleLoader__.load({
       'bind.untitled': '未命名会话',
       'bind.running': '运行中',
       'bind.commands': '在微信里发 /help 可以用 /list、/switch、/new、/current、/cancel 管理会话。',
+      'approval.mode': '权限弹窗',
+      'approval.both': '两边都出（谁先答谁生效）',
+      'approval.phone': '只在手机',
+      'approval.desktop': '只在桌面',
+      'approval.hint': '「两边都出」会同时启动桌面弹窗和微信提示，先答复的那一边生效；另外两项会让另一边完全看不到这个请求。',
       'login.phase.idle': '准备中',
       'login.phase.starting': '正在获取二维码',
       'login.phase.waiting': '等待扫码',
@@ -937,6 +989,12 @@ window.__ModuleLoader__.load({
       'bind.running': 'running',
       'bind.commands':
         'Send /help in WeChat to manage sessions with /list, /switch, /new, /current and /cancel.',
+      'approval.mode': 'Permission prompts',
+      'approval.both': 'Both (first answer wins)',
+      'approval.phone': 'Phone only',
+      'approval.desktop': 'Desktop only',
+      'approval.hint':
+        'Both starts the desktop prompt and the WeChat message together and takes whichever answers first. Either of the other two hides the request from the other side entirely.',
       'login.phase.idle': 'Preparing',
       'login.phase.starting': 'Fetching the QR code',
       'login.phase.waiting': 'Waiting for a scan',

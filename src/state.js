@@ -28,6 +28,9 @@ import path from 'node:path'
 const STATE_VERSION = 1
 const MAX_ACCOUNTS = 5
 
+/** Accepted values of `approvalMode`. */
+const APPROVAL_MODES = new Set(['both', 'phone', 'desktop'])
+
 /** Directory that owns the state file. */
 export function stateDirectory() {
   const home = process.env.DSH_HOME && process.env.DSH_HOME.trim()
@@ -101,6 +104,10 @@ export function normalizeState(raw) {
     accounts,
     syncBufs,
     bindings,
+    // Where a permission prompt is offered. `both` starts the desktop answerer
+    // and the phone prompt together and takes whichever answers first; the other
+    // two keep one side out of it entirely.
+    approvalMode: APPROVAL_MODES.has(source.approvalMode) ? source.approvalMode : 'both',
     lastError:
       source.lastError && typeof source.lastError === 'object'
         ? {

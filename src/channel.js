@@ -419,21 +419,23 @@ export function createChannel(options) {
   }
 
   /** Resolve when the phone answers, or when the request is cancelled. */
-  function waitForApproval(key, signal) {
-    return new Promise((resolve) => {
-      const entry = {}
-      const onAbort = () => entry.finish('cancelled')
-      entry.finish = (outcome) => {
-        if (pendingApprovals.get(key) === entry) pendingApprovals.delete(key)
-        if (signal) signal.removeEventListener('abort', onAbort)
-        resolve(outcome)
-      }
-      pendingApprovals.set(key, entry)
-      if (signal) {
-        if (signal.aborted) entry.finish('cancelled')
-        else signal.addEventListener('abort', onAbort, { once: true })
-      }
+  function beginApprovalWait(key, signal) {
+    const entry = {}
+    const promise = new Promise((resolve) => {
+      entry.resolve = resolve
     })
+    const onAbort = () => entry.finish('cancelled')
+    entry.finish = (outcome) => {
+      if (pendingApprovals.get(key) === entry) pendingApprovals.delete(key)
+      if (signal) signal.removeEventListener('abort', onAbort)
+      entry.resolve(outcome)
+    }
+    pendingApprovals.set(key, entry)
+    if (signal) {
+      if (signal.aborted) entry.finish('cancelled')
+      else signal.addEventListener('abort', onAbort, { once: true })
+    }
+    return { promise, finish: entry.finish }
   }
 
   /**
@@ -463,6 +465,16 @@ export function createChannel(options) {
     note('approval', `seen ${toolName} | ${sessionId || 'no-session'}`)
     if (!sessionId) return next()
 
+    // Where the prompt is offered. `both` keeps the desktop pane working while
+    // the phone also gets a copy and takes whichever answers first. The two
+    // exclusive modes each existed for one round: whichever side was left out
+    // reported the prompt as "missing", because from that side it is.
+    const mode = readState().approvalMode || 'both'
+    if (mode === 'desktop') {
+      note('approval', 'delegated | mode=desktop')
+      return next()
+    }
+
     const target = targetForSession(sessionId)
     if (!target) {
       note('approval', `delegated | no target for ${sessionId.slice(-8)}`)
@@ -484,9 +496,26 @@ export function createChannel(options) {
     if (reason) lines.push(`原因：${String(reason).slice(0, 300)}`)
     lines.push('', '回复 1 允许一次 · 2 拒绝 · 3 取消')
 
+    const wait = beginApprovalWait(key, request.signal)
     await sendReply(target.accountId, target.toUserId, target.contextToken, lines.join('\n'))
 
-    const outcome = await waitForApproval(key, request.signal)
+    if (mode === 'phone') {
+      const outcome = await wait.promise
+      note('approval', `answered ${outcome} | phone`)
+      return outcome
+    }
+
+    // `both`: start the desktop answerer as well and take the first answer.
+    const desktop = next()
+    const outcome = await Promise.race([
+      desktop.then((value) => {
+        // The desk answered first: retire the phone prompt, so a later "1" is not
+        // swallowed answering a decision nobody is waiting on any more.
+        wait.finish('cancelled')
+        return value
+      }),
+      wait.promise,
+    ])
     note('approval', `answered ${outcome}`)
     return outcome
   }
