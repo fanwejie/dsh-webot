@@ -28,8 +28,16 @@ import path from 'node:path'
 const STATE_VERSION = 1
 const MAX_ACCOUNTS = 5
 
-/** Accepted values of `approvalMode`. */
-const APPROVAL_MODES = new Set(['both', 'phone', 'desktop'])
+/**
+ * Accepted values of `approvalMode`.
+ *
+ * There is deliberately no "both". A permission request is a waterfall with one
+ * winner, and starting the desktop answerer opens a dialog in the browser that
+ * only closes when *that* answerer resolves. Letting the phone win instead leaves
+ * that dialog open forever — the host exposes no way to withdraw a request. One
+ * side, chosen up front, is the only shape that does not leave orphaned UI.
+ */
+const APPROVAL_MODES = new Set(['phone', 'desktop'])
 
 /** Directory that owns the state file. */
 export function stateDirectory() {
@@ -104,10 +112,12 @@ export function normalizeState(raw) {
     accounts,
     syncBufs,
     bindings,
-    // Where a permission prompt is offered. `both` starts the desktop answerer
-    // and the phone prompt together and takes whichever answers first; the other
-    // two keep one side out of it entirely.
-    approvalMode: APPROVAL_MODES.has(source.approvalMode) ? source.approvalMode : 'both',
+    // Where a permission prompt is offered. `phone` claims the request and the
+    // desk never sees it; `desktop` delegates and the channel stays out. Anything
+    // else — a first run, or a stored 'both' from the withdrawn race mode — is
+    // `phone`, which is the only mode where the desk cannot be left holding an
+    // orphaned dialog.
+    approvalMode: source.approvalMode === 'desktop' ? 'desktop' : 'phone',
     lastError:
       source.lastError && typeof source.lastError === 'object'
         ? {

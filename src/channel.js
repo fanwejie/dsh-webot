@@ -465,11 +465,10 @@ export function createChannel(options) {
     note('approval', `seen ${toolName} | ${sessionId || 'no-session'}`)
     if (!sessionId) return next()
 
-    // Where the prompt is offered. `both` keeps the desktop pane working while
-    // the phone also gets a copy and takes whichever answers first. The two
-    // exclusive modes each existed for one round: whichever side was left out
-    // reported the prompt as "missing", because from that side it is.
-    const mode = readState().approvalMode || 'both'
+    // Where the prompt is offered. There is no "both": once this listener claims
+    // the request the desktop answerer never runs, and once it delegates the
+    // phone never sees it. `desktop` is the way to keep the desk's own prompt.
+    const mode = readState().approvalMode === 'desktop' ? 'desktop' : 'phone'
     if (mode === 'desktop') {
       note('approval', 'delegated | mode=desktop')
       return next()
@@ -499,24 +498,12 @@ export function createChannel(options) {
     const wait = beginApprovalWait(key, request.signal)
     await sendReply(target.accountId, target.toUserId, target.contextToken, lines.join('\n'))
 
-    if (mode === 'phone') {
-      const outcome = await wait.promise
-      note('approval', `answered ${outcome} | phone`)
-      return outcome
-    }
-
-    // `both`: start the desktop answerer as well and take the first answer.
-    const desktop = next()
-    const outcome = await Promise.race([
-      desktop.then((value) => {
-        // The desk answered first: retire the phone prompt, so a later "1" is not
-        // swallowed answering a decision nobody is waiting on any more.
-        wait.finish('cancelled')
-        return value
-      }),
-      wait.promise,
-    ])
-    note('approval', `answered ${outcome}`)
+    // Claimed outright, so the desktop answerer is never started. Racing it and
+    // losing would leave the browser holding a dialog that only that answerer
+    // can close, and the host has no withdraw call: the prompt stays on screen
+    // after the turn has already moved on.
+    const outcome = await wait.promise
+    note('approval', `answered ${outcome} | phone`)
     return outcome
   }
 

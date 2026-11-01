@@ -91,9 +91,21 @@ then treated as a short id.
 
 `approval/request` is a waterfall: return an outcome to claim the request, call
 `next()` to leave it to the other answerers. The channel claims a prompt only
-when the requesting session is one it owns; everything else delegates, so a
-session you are driving at the desk keeps its desktop prompt rather than being
-silently answered by a phone nobody is looking at.
+when the requesting session is one it owns; everything else delegates.
+
+**Which side sees the prompt is a setting**, `approvalMode` in the panel:
+
+| Mode | Behaviour |
+| --- | --- |
+| `phone` (default) | The channel claims the request; the desk never shows it |
+| `desktop` | The channel delegates; the phone never shows it |
+
+There is deliberately **no "both"**, and this was learned the expensive way: it
+shipped, and it left a permission dialog stuck on the desktop after the turn had
+already finished. Calling `next()` opens a dialog in the browser that closes only
+when *that* answerer resolves; letting the phone win instead abandons it, and the
+host exposes no withdraw call. A request has exactly one owner, so the choice is
+made up front instead of raced.
 
 While a prompt is open the agent turn is blocked on it, so the phone reply is
 consumed before commands and before the agent:

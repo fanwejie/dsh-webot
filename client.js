@@ -601,12 +601,11 @@ window.__ModuleLoader__.load({
             h(
               'select',
               {
-                value: status.data.approvalMode || 'both',
+                value: status.data.approvalMode || 'phone',
                 onChange: (event) => setApprovalMode(event.target.value),
                 'aria-label': t('approval.mode'),
                 style: SELECT,
               },
-              h('option', { value: 'both' }, t('approval.both')),
               h('option', { value: 'phone' }, t('approval.phone')),
               h('option', { value: 'desktop' }, t('approval.desktop')),
             ),
@@ -915,10 +914,10 @@ window.__ModuleLoader__.load({
       'bind.running': '运行中',
       'bind.commands': '在微信里发 /help 可以用 /list、/switch、/new、/current、/cancel 管理会话。',
       'approval.mode': '权限弹窗',
-      'approval.both': '两边都出（谁先答谁生效）',
-      'approval.phone': '只在手机',
-      'approval.desktop': '只在桌面',
-      'approval.hint': '「两边都出」会同时启动桌面弹窗和微信提示，先答复的那一边生效；另外两项会让另一边完全看不到这个请求。',
+      'approval.phone': '只在手机（通道接管）',
+      'approval.desktop': '只在桌面（通道不介入）',
+      'approval.hint':
+        '两者不能同时生效：请求只有一个归属，如果两边都开，输的那一边会在界面上留下一个关不掉的弹窗——宿主没有撤回接口。',
       'login.phase.idle': '准备中',
       'login.phase.starting': '正在获取二维码',
       'login.phase.waiting': '等待扫码',
@@ -990,11 +989,10 @@ window.__ModuleLoader__.load({
       'bind.commands':
         'Send /help in WeChat to manage sessions with /list, /switch, /new, /current and /cancel.',
       'approval.mode': 'Permission prompts',
-      'approval.both': 'Both (first answer wins)',
-      'approval.phone': 'Phone only',
-      'approval.desktop': 'Desktop only',
+      'approval.phone': 'Phone only (channel claims)',
+      'approval.desktop': 'Desktop only (channel stays out)',
       'approval.hint':
-        'Both starts the desktop prompt and the WeChat message together and takes whichever answers first. Either of the other two hides the request from the other side entirely.',
+        'These cannot both be on. A request has exactly one owner, and if both sides are started the loser leaves a dialog on screen that nothing can close — the host has no withdraw call.',
       'login.phase.idle': 'Preparing',
       'login.phase.starting': 'Fetching the QR code',
       'login.phase.waiting': 'Waiting for a scan',

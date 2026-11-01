@@ -31,7 +31,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.6.1'
+const VERSION = '0.6.2'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -372,8 +372,8 @@ export function apply(ctx) {
     try {
       const payload = await request.json().catch(() => ({}))
       const mode = typeof payload?.approvalMode === 'string' ? payload.approvalMode : ''
-      if (!['both', 'phone', 'desktop'].includes(mode)) {
-        return json({ ok: false, error: 'approvalMode 只能是 both / phone / desktop' }, 400)
+      if (!['phone', 'desktop'].includes(mode)) {
+        return json({ ok: false, error: 'approvalMode 只能是 phone / desktop' }, 400)
       }
       updateState({ approvalMode: mode })
       return json({ ok: true, approvalMode: mode })
