@@ -607,17 +607,18 @@ window.__ModuleLoader__.load({
     }
 
     /**
-     * The scenario picker, drawn rather than delegated to a native `<select>`.
+     * A drawn dropdown, used for both the scenario picker and the approval mode.
      *
-     * A native select popup is painted by the platform: its corners cannot be
+     * A native `<select>` popup is painted by the platform: its corners cannot be
      * rounded and its options do not reliably take a background colour. Since the
-     * list is exactly what the user reads here, it is worth owning.
+     * list is exactly what the user reads, it is worth owning.
      *
-     * Colours are tokens, not literals: on the dark theme `bg-base` reads as black
-     * and `bg-layer-1` as the lighter grey the selected row needs, and the same pair
-     * stays legible when someone runs a light theme.
+     * Rows are exactly as tall as the closed control (28px), so the open list reads
+     * as one box continuing rather than a differently-proportioned menu. A label too
+     * long for one line is allowed to wrap, and the row thickens to fit it instead of
+     * truncating the name the user is choosing between.
      */
-    function ScenarioSelect({ t, items, valueId, pendingId, disabled, onSelect }) {
+    function Dropdown({ ariaLabel, items, valueId, disabled, onSelect, basis = '260px', minWidth = '180px' }) {
       const [open, setOpen] = React.useState(false)
       const [box, setBox] = React.useState(null)
       const triggerRef = React.useRef(null)
@@ -658,7 +659,7 @@ window.__ModuleLoader__.load({
 
       return h(
         'div',
-        { style: { position: 'relative', flex: '0 1 360px', minWidth: '240px', maxWidth: '100%' } },
+        { style: { position: 'relative', flex: `0 1 ${basis}`, minWidth, maxWidth: '100%' } },
         h(
           'button',
           {
@@ -667,7 +668,7 @@ window.__ModuleLoader__.load({
             disabled: disabled === true,
             'aria-haspopup': 'listbox',
             'aria-expanded': open ? 'true' : 'false',
-            'aria-label': t('scenario.label'),
+            'aria-label': ariaLabel,
             onClick: toggle,
             style: {
               ...SELECT,
@@ -683,8 +684,16 @@ window.__ModuleLoader__.load({
           },
           h(
             'span',
-            { style: { flex: '1 1 auto', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
-            selected ? `${selected.name}${selected.id === pendingId ? ' ' + t('scenario.pending') : ''}` : '—',
+            {
+              style: {
+                flex: '1 1 auto',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                color: selected && selected.muted ? 'var(--dsw-alias-label-secondary)' : undefined,
+              },
+            },
+            selected ? selected.label : '—',
           ),
           h('span', { style: { flex: '0 0 auto', opacity: 0.6 } }, '▾'),
         ),
@@ -718,7 +727,6 @@ window.__ModuleLoader__.load({
               },
               items.map((item) => {
                 const isSelected = item.id === valueId
-                const isPending = item.id === pendingId
                 return h(
                   'div',
                   {
@@ -730,20 +738,28 @@ window.__ModuleLoader__.load({
                       if (!isSelected) onSelect(item.id)
                     },
                     style: {
-                      padding: '6px 10px',
+                      // Same height as the closed control, and free to grow when the
+                      // label needs a second line.
+                      minHeight: '28px',
+                      boxSizing: 'border-box',
+                      display: 'flex',
+                      alignItems: 'center',
+                      padding: '4px 10px',
                       borderRadius: 'var(--dsw-radius-sm)',
                       cursor: 'pointer',
                       fontSize: '12px',
                       lineHeight: '18px',
+                      whiteSpace: 'normal',
+                      wordBreak: 'break-word',
                       // Selected: the lighter surface. Everything else: the base, which
                       // is black on the dark theme.
                       background: isSelected ? 'var(--dsw-alias-bg-layer-1)' : 'transparent',
-                      color: isPending ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-label-primary)',
+                      color: item.muted ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-label-primary)',
                       fontWeight: isSelected ? 600 : 400,
-                      textDecoration: isPending ? 'line-through' : 'none',
+                      textDecoration: item.muted ? 'line-through' : 'none',
                     },
                   },
-                  isPending ? `${item.name} ${t('scenario.pending')}` : item.name,
+                  item.label,
                 )
               }),
             )
@@ -1195,17 +1211,17 @@ window.__ModuleLoader__.load({
               'div',
               { style: { ...FIELD_ROW, alignItems: 'center' } },
               h('span', { style: FIELD_NAME }, t('approval.mode'), h(Hint, { t, text: t('approval.hint') })),
-              h(
-                'select',
-                {
-                  value: status.data.approvalMode || 'phone',
-                  onChange: (event) => setApprovalMode(event.target.value),
-                  'aria-label': t('approval.mode'),
-                  style: SELECT,
-                },
-                h('option', { value: 'phone' }, t('approval.phone')),
-                h('option', { value: 'desktop' }, t('approval.desktop')),
-              ),
+              h(Dropdown, {
+                ariaLabel: t('approval.mode'),
+                items: [
+                  { id: 'phone', label: t('approval.phone') },
+                  { id: 'desktop', label: t('approval.desktop') },
+                ],
+                valueId: status.data.approvalMode || 'phone',
+                onSelect: setApprovalMode,
+                basis: '260px',
+                minWidth: '220px',
+              }),
             ),
             h(NumberField, {
               t,
@@ -1361,13 +1377,21 @@ window.__ModuleLoader__.load({
               'div',
               { style: { ...FIELD_ROW, alignItems: 'center', marginTop: '10px' } },
               h('span', { style: FIELD_NAME }, t('scenario.label'), h(Hint, { t, text: t('scenario.hint') })),
-              h(ScenarioSelect, {
-                t,
-                items: scenarios,
+              h(Dropdown, {
+                ariaLabel: t('scenario.label'),
+                items: scenarios.map((item) => ({
+                  id: item.id,
+                  muted: item.id === pendingDeleteId,
+                  label:
+                    item.id === pendingDeleteId
+                      ? `${item.name} ${t('scenario.pending')}`
+                      : item.name,
+                })),
                 valueId: active.id,
-                pendingId: pendingDeleteId,
                 disabled: status.data.channelPromptEnabled === false,
                 onSelect: (id) => postSettings({ activeScenarioId: id }),
+                basis: '360px',
+                minWidth: '240px',
               }),
               pendingDeleteId
                 ? h(Btn, { label: t('scenario.undo'), onClick: () => setPendingDeleteId(null) })
