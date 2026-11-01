@@ -29,7 +29,7 @@ import { downloadMedia, extensionForName } from './protocol/media.js'
 import { sendMediaToWeChat } from './protocol/outbound-media.js'
 import { ANCHOR_REMINDER, composeTail } from './persona.js'
 import { atTheDesk, watchDesk } from './presence.js'
-import { appendEventLog, readState, updateState } from './state.js'
+import { activeScenario, appendEventLog, readState, updateState } from './state.js'
 
 /** Longest slice of one answer sent as a single WeChat message. */
 const MAX_REPLY_CHARS = 1200
@@ -925,7 +925,11 @@ export function createChannel(options) {
     // The switch in the panel governs the long note only. '' here makes
     // takePromptFor fall straight through to the anchor, which has no switch on
     // purpose: it is the one line whose absence silences the reply path.
-    const promptText = state.channelPromptEnabled === false ? '' : composeTail({ channelPrompt: state.channelPrompt })
+    // The note itself is whichever named scenario is active.
+    const promptText =
+      state.channelPromptEnabled === false
+        ? ''
+        : composeTail({ channelPrompt: activeScenario(state).content })
     const tail = takePromptFor(account.accountId, userId, promptText, state)
     const body = tail ? `${content}\n\n${tail}` : content
 

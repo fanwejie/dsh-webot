@@ -125,6 +125,48 @@ function text(value, max = 512) {
   return typeof value === 'string' ? value.slice(0, max) : ''
 }
 
+/** How many named scenarios one install may keep. */
+const MAX_SCENARIOS = 20
+
+/**
+ * The named channel prompts, as a list.
+ *
+ * A single string used to hold this. The migration is deliberate: an existing
+ * `channelPrompt` becomes the first scenario, so an upgrade never silently drops
+ * text somebody wrote. An install that never set one gets the shipped default under
+ * the name 默认.
+ */
+function normalizeScenarios(source) {
+  const list = []
+  const seen = new Set()
+  if (Array.isArray(source.scenarios)) {
+    for (const entry of source.scenarios) {
+      if (!entry || typeof entry !== 'object') continue
+      const content = clampPrompt(entry.content)
+      const rawName = text(entry.name, 60).trim()
+      if (!content && !rawName) continue
+      let id = text(entry.id, 64).trim() || `s${list.length + 1}`
+      if (seen.has(id)) id = `${id}-${list.length + 1}`
+      seen.add(id)
+      list.push({ id, name: rawName || `场景 ${list.length + 1}`, content })
+      if (list.length >= MAX_SCENARIOS) break
+    }
+  }
+  if (list.length === 0) {
+    const carried =
+      source.channelPrompt === undefined ? DEFAULT_CHANNEL_PROMPT : clampPrompt(source.channelPrompt)
+    list.push({ id: 'default', name: '默认', content: carried })
+  }
+  return list
+}
+
+/** The scenario the channel is using right now. Never undefined: the list is never empty. */
+export function activeScenario(state) {
+  const list = Array.isArray(state && state.scenarios) ? state.scenarios : []
+  const found = list.find((item) => item.id === (state && state.activeScenarioId))
+  return found || list[0] || { id: '', name: '', content: '' }
+}
+
 function normalizeAccount(raw) {
   if (!raw || typeof raw !== 'object') return undefined
   const accountId = text(raw.accountId, 128)
@@ -192,6 +234,8 @@ export function normalizeState(raw) {
     }
   }
 
+  const scenarios = normalizeScenarios(source)
+
   return {
     version: STATE_VERSION,
     accounts,
@@ -227,10 +271,12 @@ export function normalizeState(raw) {
     // `undefined` means "never set", which takes the default; an empty string is
     // a deliberate "off" and stays empty, the same distinction the reference makes
     // with `stored.presenceNote ?? DEFAULT_SETTINGS.presenceNote`.
-    channelPrompt:
-      source.channelPrompt === undefined
-        ? DEFAULT_CHANNEL_PROMPT
-        : clampPrompt(source.channelPrompt),
+    // The named channel prompts. `activeScenarioId` always points at one of them;
+    // anything else falls back to the first, so a deleted active scenario cannot
+    // leave the channel with no note at all.
+    scenarios,
+    activeScenarioId:
+      scenarios.find((item) => item.id === source.activeScenarioId)?.id || scenarios[0].id,
     // The one-liner appended on every turn. Same undefined/'' distinction, and a
     // much smaller cap because it is paid on every message rather than every N.
     anchorPrompt:

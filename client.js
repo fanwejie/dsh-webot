@@ -522,6 +522,90 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * Editor for one named scenario: name, content, save, cancel.
+     *
+     * Rendered as its own layer above the settings panel rather than inline, because
+     * the content field is a full prompt and the list behind it should not scroll
+     * while it is being written.
+     */
+    const SCENARIO_LAYER = {
+      position: 'fixed',
+      inset: 0,
+      zIndex: 1500,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: 'rgba(0, 0, 0, 0.45)',
+    }
+
+    const SCENARIO_CARD = {
+      boxSizing: 'border-box',
+      width: '560px',
+      maxWidth: 'calc(100vw - 48px)',
+      maxHeight: 'calc(100vh - 96px)',
+      overflowY: 'auto',
+      padding: '18px 18px 14px',
+      borderRadius: 'var(--dsw-radius-md)',
+      border: '1px solid var(--dsw-alias-border-l2)',
+      background: 'var(--dsw-alias-bg-layer-2)',
+      color: 'var(--dsw-alias-label-primary)',
+      boxShadow: 'var(--dsw-elevation-prominent)',
+    }
+
+    function ScenarioEditor({ t, initial, onSave, onCancel }) {
+      const [name, setName] = React.useState(initial.name || '')
+      const [content, setContent] = React.useState(initial.content || '')
+      const nameRef = React.useRef(null)
+      const canSave = name.trim().length > 0
+
+      React.useEffect(() => {
+        const timer = setTimeout(() => {
+          if (nameRef.current && typeof nameRef.current.focus === 'function') nameRef.current.focus()
+        }, 0)
+        return () => clearTimeout(timer)
+      }, [])
+
+      return h(
+        'div',
+        { style: SCENARIO_LAYER, onMouseDown: (event) => { if (event.target === event.currentTarget) onCancel() } },
+        h(
+          'div',
+          { role: 'dialog', 'aria-modal': 'true', style: SCENARIO_CARD },
+          h('h3', { style: SECTION_TITLE }, initial.id ? t('scenario.editTitle') : t('scenario.addTitle')),
+          h('p', { style: { ...MUTED, marginTop: '10px' } }, t('scenario.nameLabel')),
+          h('input', {
+            ref: nameRef,
+            type: 'text',
+            value: name,
+            maxLength: 60,
+            onChange: (event) => setName(event.target.value),
+            'aria-label': t('scenario.nameLabel'),
+            style: { ...TEXT_INPUT, width: '100%', letterSpacing: 'normal' },
+          }),
+          h('p', { style: { ...MUTED, marginTop: '10px' } }, t('scenario.contentLabel')),
+          h('textarea', {
+            value: content,
+            onChange: (event) => setContent(event.target.value),
+            rows: 12,
+            'aria-label': t('scenario.contentLabel'),
+            style: TEXTAREA,
+          }),
+          h(
+            'div',
+            { style: { marginTop: '12px', display: 'flex', gap: '8px', justifyContent: 'flex-end' } },
+            h(Btn, { label: t('scenario.cancel'), onClick: onCancel }),
+            h(Btn, {
+              label: t('scenario.save'),
+              variant: 'primary',
+              disabled: !canSave,
+              onClick: () => onSave({ name: name.trim(), content }),
+            }),
+          ),
+        ),
+      )
+    }
+
     /* ------------------------------------------------------------------ *
      * The channel body: status, binding, and the QR handshake
      * ------------------------------------------------------------------ */
@@ -679,32 +763,76 @@ window.__ModuleLoader__.load({
       }
 
       /**
-       * Drafts for the two prompt strings: null means "showing the saved value".
+       * Draft for the every-turn reminder: null means "showing the saved value".
        *
-       * They save together because they are one surface — the note and the one-liner
-       * that rides in front of it — and a half-saved pair is a confusing state.
+       * The channel prompt is no longer a draft here — it is a named scenario edited
+       * in its own dialog, so it saves on its own rather than with this field.
        */
-      const [draftChannel, setDraftChannel] = React.useState(null)
       const [draftAnchor, setDraftAnchor] = React.useState(null)
 
       function savePrompts() {
-        const patch = {}
-        if (draftChannel !== null) patch.channelPrompt = draftChannel
-        if (draftAnchor !== null) patch.anchorPrompt = draftAnchor
-        if (Object.keys(patch).length === 0) return
+        if (draftAnchor === null) return
         setBindError('')
-        post(SETTINGS_URL, patch)
+        post(SETTINGS_URL, { anchorPrompt: draftAnchor })
           .then((body) => {
             if (!body || body.ok !== true) {
               setBindError((body && body.error) || t('bind.failed'))
               return
             }
-            setDraftChannel(null)
             setDraftAnchor(null)
             refreshStatus()
           })
           .catch((error) => setBindError((error && error.message) || String(error)))
       }
+
+      /* --- named channel prompts --- */
+      const scenarios = Array.isArray(status.data.scenarios) ? status.data.scenarios : []
+      const activeId = String(status.data.activeScenarioId || '')
+      const active =
+        scenarios.find((item) => item.id === activeId) || scenarios[0] || { id: '', name: '', content: '' }
+      // null = no editor open; {id} present = editing that scenario, absent = adding.
+      const [editor, setEditor] = React.useState(null)
+      // Deletion is staged until the panel closes; see the unmount commit below.
+      const [pendingDeleteId, setPendingDeleteId] = React.useState(null)
+
+      function saveScenario(draft) {
+        const list = scenarios.map((item) => ({ id: item.id, name: item.name, content: item.content }))
+        if (editor && editor.id) {
+          const index = list.findIndex((item) => item.id === editor.id)
+          if (index >= 0) list[index] = { ...list[index], name: draft.name, content: draft.content }
+          setEditor(null)
+          postSettings({ scenarios: list })
+          return
+        }
+        // Slug from the clock: ids only have to be unique inside this list.
+        const id = `s${Date.now().toString(36)}`
+        list.push({ id, name: draft.name, content: draft.content })
+        setEditor(null)
+        postSettings({ scenarios: list, activeScenarioId: id })
+      }
+
+      // The newest list and pending id, readable from the unmount cleanup, which
+      // cannot see later renders.
+      const pendingRef = React.useRef(null)
+      pendingRef.current = pendingDeleteId
+        ? { id: pendingDeleteId, list: scenarios.map((item) => ({ id: item.id, name: item.name, content: item.content })) }
+        : null
+
+      React.useEffect(
+        () => () => {
+          const pending = pendingRef.current
+          if (!pending) return
+          const remaining = pending.list.filter((item) => item.id !== pending.id)
+          // The last scenario cannot be deleted: the channel would have no note.
+          if (remaining.length === 0) return
+          // Fired when the panel unmounts, which is exactly "panel closed".
+          void post(SETTINGS_URL, {
+            scenarios: remaining,
+            activeScenarioId: remaining[0].id,
+          })
+        },
+        [],
+      )
 
       /** Write one settings patch and refresh, surfacing the Host's rejection. */
       function postSettings(patch) {
@@ -1052,42 +1180,103 @@ window.__ModuleLoader__.load({
               onCommit: (value) => postSettings({ promptRefreshTurns: value }),
             }),
             h(
-              'p',
-              { style: { ...MUTED, marginTop: '10px' } },
-              t('persona.channelLabel'),
-              h(Hint, { t, text: t('persona.channelHint') }),
+              'div',
+              { style: { ...FIELD_ROW, alignItems: 'center', marginTop: '10px' } },
+              h('span', { style: FIELD_NAME }, t('scenario.label'), h(Hint, { t, text: t('scenario.hint') })),
+              h(
+                'select',
+                {
+                  value: active.id,
+                  disabled: status.data.channelPromptEnabled === false,
+                  onChange: (event) => postSettings({ activeScenarioId: event.target.value }),
+                  'aria-label': t('scenario.label'),
+                  style: {
+                    ...SELECT,
+                    maxWidth: '220px',
+                    opacity: status.data.channelPromptEnabled === false ? 0.5 : 1,
+                  },
+                },
+                scenarios.map((item) =>
+                  h(
+                    'option',
+                    {
+                      key: item.id,
+                      value: item.id,
+                      // Chromium honours option colours, which is the only way to grey a
+                      // single row of a native select without replacing the control.
+                      style:
+                        item.id === pendingDeleteId
+                          ? { color: 'var(--dsw-alias-label-secondary)' }
+                          : undefined,
+                    },
+                    item.id === pendingDeleteId ? `${item.name} ${t('scenario.pending')}` : item.name,
+                  ),
+                ),
+              ),
+              pendingDeleteId
+                ? h(Btn, { label: t('scenario.undo'), onClick: () => setPendingDeleteId(null) })
+                : h(Btn, {
+                    label: t('scenario.edit'),
+                    disabled: !active.id,
+                    onClick: () => setEditor({ id: active.id, name: active.name, content: active.content }),
+                  }),
+              pendingDeleteId
+                ? null
+                : h(Btn, {
+                    label: t('scenario.delete'),
+                    disabled: scenarios.length <= 1,
+                    onClick: () => setPendingDeleteId(active.id),
+                  }),
             ),
-            h('textarea', {
-              value: draftChannel === null ? String(status.data.channelPrompt || '') : draftChannel,
-              onChange: (event) => setDraftChannel(event.target.value),
-              disabled: status.data.channelPromptEnabled === false,
-              // Tall enough to read a real prompt: the shipped default is ~260 lines,
-              // and a five-row box makes editing it a scroll hunt.
-              rows: 12,
-              'aria-label': t('persona.channelLabel'),
-              style: {
-                ...TEXTAREA,
-                opacity: status.data.channelPromptEnabled === false ? 0.5 : 1,
-              },
-            }),
+            h(
+              'p',
+              { style: { margin: '6px 0 0', fontSize: '12px', lineHeight: '18px' } },
+              h(
+                'button',
+                {
+                  type: 'button',
+                  disabled: pendingDeleteId !== null,
+                  onClick: () => setEditor({ name: '', content: '' }),
+                  style: {
+                    padding: 0,
+                    border: 0,
+                    background: 'transparent',
+                    color: pendingDeleteId ? 'var(--dsw-alias-label-secondary)' : 'var(--dsw-alias-brand-primary)',
+                    cursor: pendingDeleteId ? 'default' : 'pointer',
+                    font: 'inherit',
+                    textDecoration: pendingDeleteId ? 'none' : 'underline',
+                  },
+                },
+                t('scenario.add'),
+              ),
+            ),
+            pendingDeleteId
+              ? h('p', { style: { ...MUTED, marginTop: '6px' } }, t('scenario.pendingHint'))
+              : null,
             h(
               'div',
-              { style: { marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+              { style: { marginTop: '10px', display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
               h(Btn, {
                 label: t('persona.save'),
                 onClick: savePrompts,
                 variant: 'primary',
-                disabled: draftChannel === null && draftAnchor === null,
+                disabled: draftAnchor === null,
               }),
               h(Btn, {
                 label: t('persona.restoreAnchor'),
                 onClick: () => setDraftAnchor(String(status.data.defaultAnchorPrompt || '')),
               }),
-              h(Btn, {
-                label: t('persona.restore'),
-                onClick: () => setDraftChannel(String(status.data.defaultChannelPrompt || '')),
-              }),
             ),
+            // Rendered here rather than at the root: it reads this group's state, and
+            // `position: fixed` means its DOM parent does not matter.
+            editor
+              ? h(ScenarioEditor, {
+                  t,
+                  initial: editor,
+                  onSave: saveScenario,
+                  onCancel: () => setEditor(null),
+                })
+              : null,
           ),
           h(
             'section',
@@ -1461,15 +1650,26 @@ window.__ModuleLoader__.load({
       'persona.anchorHint':
         '这条每轮都会追加，不按轮次省。它只干一件事：提醒 agent 必须调用 send_to_wechat，否则你收不到消息。可以改措辞，但清空就等于关掉——关掉之后它忘调工具时不会有任何提示。',
       'persona.restoreAnchor': '恢复提醒默认',
-      'persona.channelLabel': '场合提示词（按轮次重发）',
-      'persona.channelHint':
-        '完整的人格与场合说明。不会每条都发，按上面的"提示词重发"轮次来；改了会立刻重发一次。关掉开关就完全不发，只留上面那条每轮提醒。',
+      'scenario.label': '场景提示词',
+      'scenario.hint':
+        '一套"怎么说话、在什么场合"的完整说明。可以存多套，随时切换——比如"工作"和"闲聊"两套不同的语气。只有选中的那套会发给 agent。',
+      'scenario.add': '点击添加场景提示词',
+      'scenario.edit': '调整',
+      'scenario.delete': '删除',
+      'scenario.undo': '撤销删除',
+      'scenario.pending': '（将删除）',
+      'scenario.pendingHint': '关闭面板后才会真正删除；现在点「撤销删除」可以反悔。',
+      'scenario.addTitle': '添加场景提示词',
+      'scenario.editTitle': '调整场景提示词',
+      'scenario.nameLabel': '名称',
+      'scenario.contentLabel': '内容',
+      'scenario.save': '保存',
+      'scenario.cancel': '取消',
       'prompt.enable': '发送场合提示词',
       'prompt.enableHint':
         '关掉后不再追加那段长提示词，只发每轮提醒。适合你只想让它干活、不想让它演人格的时候。',
-      'prompt.enableState': '下面的长提示词与重发轮次都受这个开关控制',
+      'prompt.enableState': '下面的场景提示词与重发轮次都受这个开关控制',
       'persona.save': '保存提示词',
-      'persona.restore': '恢复默认',
       'persona.hint': '追加在消息末尾；保存后下一条消息生效，不用重启。',
       'login.phase.idle': '准备中',
       'login.phase.starting': '正在获取二维码',
@@ -1596,15 +1796,26 @@ window.__ModuleLoader__.load({
       'persona.anchorHint':
         'This one is appended on every turn, never skipped. It does exactly one job: remind the agent that it must call send_to_wechat or you receive nothing. Change the wording freely, but clearing it turns it off - and then a forgotten tool call is silent.',
       'persona.restoreAnchor': 'Restore reminder',
-      'persona.channelLabel': 'Channel prompt (re-sent on a schedule)',
-      'persona.channelHint':
-        'The full persona and situation note. Not sent every message - it follows the resend interval above, and an edit re-sends it once immediately. Turn the switch off and it is never sent at all, leaving only the every-turn reminder.',
-      'prompt.enable': 'Send the channel prompt',
+      'scenario.label': 'Scenario prompt',
+      'scenario.hint':
+        'A complete "where we are and how to talk" note. Keep as many as you like and switch between them - a work voice and a chat voice, for example. Only the selected one is sent.',
+      'scenario.add': 'Add a scenario prompt',
+      'scenario.edit': 'Edit',
+      'scenario.delete': 'Delete',
+      'scenario.undo': 'Undo delete',
+      'scenario.pending': '(to be deleted)',
+      'scenario.pendingHint': 'It is only removed when the panel closes; until then 撤销删除 brings it back.',
+      'scenario.addTitle': 'Add a scenario prompt',
+      'scenario.editTitle': 'Edit scenario prompt',
+      'scenario.nameLabel': 'Name',
+      'scenario.contentLabel': 'Content',
+      'scenario.save': 'Save',
+      'scenario.cancel': 'Cancel',
+      'prompt.enable': 'Send the scenario prompt',
       'prompt.enableHint':
         'Off means the long note is never appended, only the every-turn reminder. Useful when you want the work done without any persona.',
-      'prompt.enableState': 'This switch governs the long prompt below and its resend interval',
+      'prompt.enableState': 'This switch governs the scenario prompt below and its resend interval',
       'persona.save': 'Save prompt',
-      'persona.restore': 'Restore default',
       'persona.hint': 'Appended after the message; saving is enough, the next turn uses it.',
       'login.phase.idle': 'Preparing',
       'login.phase.starting': 'Fetching the QR code',

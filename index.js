@@ -37,7 +37,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.26.1'
+const VERSION = '0.27.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -135,7 +135,8 @@ function readStatus() {
     maxReplyChars: state.maxReplyChars,
     mediaMaxPerMessage: state.mediaMaxPerMessage,
     maxListRows: state.maxListRows,
-    channelPrompt: state.channelPrompt,
+    scenarios: state.scenarios,
+    activeScenarioId: state.activeScenarioId,
     channelPromptEnabled: state.channelPromptEnabled,
     anchorPrompt: state.anchorPrompt,
     // Shipped default, so the panel can offer "restore" without a second route.
@@ -571,14 +572,38 @@ export function apply(ctx) {
         patch.anchorPrompt = payload.anchorPrompt
       }
 
-      // The prompt is free text. An empty string is stored as-is and means "off" —
-      // it is not silently replaced by the default, or the field could never be
-      // cleared.
-      if (payload && typeof payload.channelPrompt === 'string') {
-        if (payload.channelPrompt.length > MAX_PROMPT_CHARS) {
-          return json({ ok: false, error: `channelPrompt 超过 ${MAX_PROMPT_CHARS} 字` }, 400)
+      // The named scenarios. Shape and lengths are enforced here so a bad payload
+      // cannot reach the state file; normalizeState clamps again on read.
+      if (payload && payload.scenarios !== undefined) {
+        if (!Array.isArray(payload.scenarios)) {
+          return json({ ok: false, error: 'scenarios 必须是数组' }, 400)
         }
-        patch.channelPrompt = payload.channelPrompt
+        if (payload.scenarios.length === 0) {
+          return json({ ok: false, error: '至少要保留一个场景' }, 400)
+        }
+        if (payload.scenarios.length > 20) {
+          return json({ ok: false, error: '场景最多 20 个' }, 400)
+        }
+        const cleaned = []
+        for (const entry of payload.scenarios) {
+          if (!entry || typeof entry !== 'object') {
+            return json({ ok: false, error: '场景格式不对' }, 400)
+          }
+          const name = typeof entry.name === 'string' ? entry.name.trim() : ''
+          const content = typeof entry.content === 'string' ? entry.content : ''
+          if (!name) return json({ ok: false, error: '场景名称不能为空' }, 400)
+          if (name.length > 60) return json({ ok: false, error: '场景名称最多 60 字' }, 400)
+          if (content.length > MAX_PROMPT_CHARS) {
+            return json({ ok: false, error: `场景内容超过 ${MAX_PROMPT_CHARS} 字` }, 400)
+          }
+          const id = typeof entry.id === 'string' && entry.id.trim() ? entry.id.trim().slice(0, 64) : ''
+          cleaned.push({ id, name, content })
+        }
+        patch.scenarios = cleaned
+      }
+
+      if (payload && typeof payload.activeScenarioId === 'string') {
+        patch.activeScenarioId = payload.activeScenarioId
       }
 
       if (Object.keys(patch).length === 0) {
@@ -598,7 +623,8 @@ export function apply(ctx) {
         maxReplyChars: next.maxReplyChars,
         mediaMaxPerMessage: next.mediaMaxPerMessage,
         maxListRows: next.maxListRows,
-        channelPrompt: next.channelPrompt,
+        scenarios: next.scenarios,
+        activeScenarioId: next.activeScenarioId,
         channelPromptEnabled: next.channelPromptEnabled,
         anchorPrompt: next.anchorPrompt,
       })

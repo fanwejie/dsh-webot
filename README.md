@@ -156,17 +156,34 @@ M4 fixes it in two ways:
 
 ## The prompt
 
-One editable note, **appended after the user's message** — but not on every turn
-any more. It goes out in two layers:
+**Named scenarios, plus one anchor.** The long note is no longer a single string: it
+is a list of scenarios you can add, edit, switch and delete, because the voice you
+want for work is not the one you want at 11pm.
+
+```
+场景提示词  [ 工作 ▾ ]  [调整] [删除]
+           点击添加场景提示词
+```
 
 | Layer | When | Size |
 | --- | --- | --- |
 | Anchor | **every turn, no switch** | 48 chars |
-| Full note | every N turns, or when the text changes — **switchable** | 1,509 chars |
+| Scenario (the active one) | every N turns, or when the text changes — **switchable** | up to 8,000 chars |
 
-`发送场合提示词` turns the full note off entirely; the anchor has no such control on
+`发送场合提示词` turns the scenario note off entirely; the anchor has no such control on
 purpose. Turning the note off costs nothing but the persona; turning the anchor off
 would silence every reply path at once, and silently.
+
+Adding and editing happen in their own dialog — name, content, save, cancel — because
+a full prompt does not belong in a row of a settings list.
+
+**Deleting is staged.** 删除 greys the option and turns into 撤销删除; nothing is
+written until the panel closes. That way one misplaced click cannot destroy a prompt
+that took ten minutes to write, and the undo is in the same place as the mistake.
+The last scenario cannot be deleted: the channel would have nothing to send.
+
+`channelPrompt` from an earlier version is migrated into the first scenario on read,
+so an upgrade never drops text somebody wrote.
 
 The anchor carries exactly one rule: *这轮回复要用 send_to_wechat 的 text 发出去，否则他
 收不到任何消息*. It is exempt from the schedule because in tool-only mode a turn that
