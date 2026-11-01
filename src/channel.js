@@ -598,21 +598,59 @@ export function createChannel(options) {
   }
 
   /**
-   * Send a local file to the conversation that owns `sessionId`.
+   * The phone this machine is bound to.
    *
-   * Relative paths resolve against the session's workspace, not the process
-   * directory: the agent produced the file while working in `cwd`, and that is
-   * what a relative path means to it.
+   * Used only for outbound sends. Approvals and questions stay strictly
+   * session-scoped: claiming a desk session's prompt because it happens to run on
+   * the same machine would send a dialog to a phone nobody is looking at, which is
+   * the opposite of what that rule protects.
+   */
+  function boundConversationTarget() {
+    const state = readState()
+    const account = state.accounts[0]
+    if (!account) return undefined
+    const key = `${account.accountId}:${account.userId}`
+    if (!state.bindings[key]) return undefined
+    // No context token without an inbound message. The gateway accepts a send
+    // without one; it only loses the reply-context link.
+    return { accountId: account.accountId, toUserId: account.userId, contextToken: '' }
+  }
+
+  /** A session's `cwd`, for resolving a relative path the way that session means it. */
+  async function workingDirectoryOf(sessionId) {
+    try {
+      const value = await sessionController.list({}, AbortSignal.timeout(5000))
+      const items = Array.isArray(value && value.items) ? value.items : []
+      const found = items.find((item) => String(item.sessionId) === sessionId)
+      if (found && found.cwd) return String(found.cwd)
+    } catch {
+      /* fall through to the conversation workspace */
+    }
+    return ''
+  }
+
+  /**
+   * Send a local file to the phone.
+   *
+   * The session that owns the conversation wins; any other session on this machine
+   * falls back to the bound conversation. Without that fallback the tool is only
+   * usable from inside a WeChat-started session, which is not where the user is
+   * when they ask the desk to "send me that picture".
+   *
+   * Relative paths resolve against the calling session's `cwd` — that is what the
+   * path means to the agent that produced it — and against the conversation
+   * workspace only when the session cannot be found.
    */
   async function sendFileToConversation(sessionId, filePath, caption) {
-    const target = targetForSession(sessionId)
-    if (!target) throw new Error('这个会话没有绑定微信对话，文件发不出去')
+    const direct = targetForSession(sessionId)
+    const target = direct || boundConversationTarget()
+    if (!target) throw new Error('这台机器还没绑定微信，文件发不出去')
 
     const account = readState().accounts.find((entry) => entry.accountId === target.accountId)
     if (!account) throw new Error('找不到可用的微信账号')
 
-    const binding = readState().bindings[`${target.accountId}:${target.toUserId}`]
-    const base = (binding && binding.cwd) || workspaceDirectory
+    const conversationCwd = readState().bindings[`${target.accountId}:${target.toUserId}`]?.cwd
+    const base = (direct ? '' : await workingDirectoryOf(sessionId)) || conversationCwd || workspaceDirectory
     const resolved = path.isAbsolute(filePath) ? filePath : path.resolve(base, filePath)
 
     const result = await sendMediaToWeChat({
@@ -623,7 +661,10 @@ export function createChannel(options) {
       filePath: resolved,
       caption: caption || '',
     })
-    note('send-media', `${result.kind} | ${result.fileName} | ${result.bytes} bytes`)
+    note(
+      'send-media',
+      `${result.kind} | ${result.fileName} | ${result.bytes} bytes${direct ? '' : ' | cross-session'}`,
+    )
     return { sent: true, kind: result.kind, fileName: result.fileName, bytes: result.bytes }
   }
 

@@ -363,6 +363,21 @@ is not a flake.
 | `cordis.patch.yml` | One Host row, id `dsh-webot`. |
 | `tools/` | Dev-only readers for the installed DSH bundles. |
 
+### Sending from any session
+
+`send_to_wechat` resolves its target as: **the session's own conversation, else the
+one this machine is bound to**. Without the fallback the tool only worked from
+inside a WeChat-started session — which is not where you are when you ask the desk
+to "send me that picture", and the tool failed with "这个会话没有绑定微信对话".
+
+Approvals and structured questions deliberately do **not** get this fallback: they
+stay strictly session-scoped. Sending a dialog to a phone nobody is looking at is
+the opposite of what that rule protects.
+
+Relative paths resolve against the calling session's `cwd` (what the path means to
+the agent that produced it), and against the conversation workspace only when the
+session cannot be looked up.
+
 Package name, patch row id and the `client.js` module id must stay equal
 (`dsh-webot`); the plugin manager and the client module loader both key on it.
 

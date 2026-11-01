@@ -173,7 +173,11 @@ export function normalizeState(raw) {
 export function readState() {
   try {
     const raw = fs.readFileSync(stateFilePath(), 'utf8')
-    return normalizeState(JSON.parse(raw))
+    // A file edited in Notepad can carry a UTF-8 BOM. `JSON.parse` rejects it, and
+    // the catch below would then quarantine a state file whose content was fine —
+    // the bot would come back up with no accounts and no explanation. Stripping it
+    // is one line; diagnosing that is not.
+    return normalizeState(JSON.parse(raw.replace(/^\uFEFF/, '')))
   } catch (error) {
     if (error && error.code === 'ENOENT') return normalizeState(undefined)
     // A corrupt file must not brick the channel: start clean, keep the bytes
