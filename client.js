@@ -541,6 +541,39 @@ window.__ModuleLoader__.load({
       const [bindError, setBindError] = React.useState('')
       const [mergeDraft, setMergeDraft] = React.useState(null)
       const [refreshDraft, setRefreshDraft] = React.useState(null)
+      const [doneDraft, setDoneDraft] = React.useState(null)
+
+      /** Commit the done-notification delay; same contract as the other numbers. */
+      function commitDone() {
+        if (doneDraft === null) return
+        const raw = String(doneDraft).trim()
+        if (raw === '') {
+          setDoneDraft(null)
+          return
+        }
+        const seconds = Number(raw)
+        if (!Number.isFinite(seconds)) {
+          setDoneDraft(null)
+          return
+        }
+        const clamped = Math.min(600, Math.max(5, Math.round(seconds)))
+        setDoneDraft(String(clamped))
+        setBindError('')
+        post(SETTINGS_URL, { doneNotifyDelaySec: clamped })
+          .then((body) => {
+            if (!body || body.ok !== true) {
+              setBindError((body && body.error) || t('bind.failed'))
+              setDoneDraft(null)
+              return
+            }
+            refreshStatus()
+            setDoneDraft(null)
+          })
+          .catch((error) => {
+            setBindError((error && error.message) || String(error))
+            setDoneDraft(null)
+          })
+      }
 
       /** Commit the prompt-refresh draft; same contract as the other number fields. */
       function commitRefresh() {
@@ -978,6 +1011,42 @@ window.__ModuleLoader__.load({
           ),
           h(
             'div',
+            { style: { ...FIELD_ROW, alignItems: 'center' } },
+            h('span', { style: FIELD_NAME }, t('done.label'), h(Hint, { t, text: t('done.hint') })),
+            h('input', {
+              type: 'checkbox',
+              checked: status.data.doneNotifyEnabled === true,
+              onChange: (event) => {
+                const checked = Boolean(event.target.checked)
+                setBindError('')
+                postSettings({ doneNotifyEnabled: checked })
+              },
+              'aria-label': t('done.label'),
+              style: { width: '14px', height: '14px', margin: 0, accentColor: 'var(--dsw-alias-brand-primary)' },
+            }),
+            h('span', { style: { ...MUTED, margin: 0 } }, t('done.unit')),
+            h('input', {
+              type: 'number',
+              min: 5,
+              max: 600,
+              disabled: status.data.doneNotifyEnabled !== true,
+              value:
+                doneDraft === null ? String(status.data.doneNotifyDelaySec ?? 30) : doneDraft,
+              onChange: (event) => setDoneDraft(event.target.value),
+              onBlur: commitDone,
+              onKeyDown: (event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  event.currentTarget.blur()
+                }
+              },
+              'aria-label': t('done.delay'),
+              style: { ...TEXT_INPUT, width: '72px', letterSpacing: 'normal' },
+            }),
+            h('span', { style: { ...MUTED, margin: 0 } }, t('done.delayUnit')),
+          ),
+          h(
+            'div',
             {
               style: {
                 marginTop: '16px',
@@ -1350,6 +1419,13 @@ window.__ModuleLoader__.load({
       'merge.hint': '发图/文件后等这么多秒：期间你打字就并成一条发给 agent，没打就等到点再发。填 0 = 不等，立刻发。',
       'promptRefresh.label': '提示词重发',
       'promptRefresh.unit': '轮完整发一次',
+      'done.label': '任务完成提醒',
+      'done.unit': '打开后：别的会话跑完，且你',
+      'done.delay': '等待秒数',
+      'done.delayUnit': '秒内没动鼠标/键盘，就发微信告诉你',
+      'done.hint':
+        '只提醒别的会话（微信自己的会话不提醒，它本来就会回你）。判定方式：任务结束后盯这么久，这期间你碰了鼠标或键盘，就当你在电脑前，不打扰你；一直没动，就发一条"[系统提示] 工作区 · 会话 · DSH 已跑完"到微信。这条消息由通道直接发出，不经过 AI。'
+        + '需要读 Windows 的"最后输入时间"，所以每次判定会起一个 PowerShell 进程（约 0.3 秒）。',
       'promptRefresh.hint': '完整提示词不再每条都发；平时只带一句"必须调工具"的提醒。改提示词后会自动重发一次。',
       'persona.heading': '提示词',
       'persona.channelLabel': '场合提示词（每条消息都会追加）',
@@ -1446,6 +1522,13 @@ window.__ModuleLoader__.load({
         'After a file: text you type within this window is sent together with it; silence sends the file on its own. 0 = never wait.',
       'promptRefresh.label': 'Prompt refresh',
       'promptRefresh.unit': 'turns between full resends',
+      'done.label': 'Task finished',
+      'done.unit': 'Notify me when another session finishes, if I stay away for',
+      'done.delay': 'Wait seconds',
+      'done.delayUnit': 'seconds — mouse or keyboard input cancels it',
+      'done.hint':
+        'Only sessions other than the WeChat one (that one already answers you). After a task ends the channel watches the desk for this long: any mouse or keyboard input means you are right there, so it stays quiet; no input means it sends "[系统提示] workspace · session · DSH 已跑完" straight to WeChat, without the AI. '
+        + 'Reading the desktop\'s last-input time needs a PowerShell spawn (~0.3 s) per decision.',
       'promptRefresh.hint':
         'The full prompt is no longer sent every message; a one-line tool reminder goes out each turn. Editing the prompt triggers a resend.',
       'persona.heading': 'Prompt',

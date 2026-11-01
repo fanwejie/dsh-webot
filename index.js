@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.20.0'
+const VERSION = '0.21.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -124,6 +124,8 @@ function readStatus() {
     approvalTimeoutSec: state.approvalTimeoutSec || 30,
     mediaMergeSec: state.mediaMergeSec,
     promptRefreshTurns: state.promptRefreshTurns,
+    doneNotifyEnabled: state.doneNotifyEnabled,
+    doneNotifyDelaySec: state.doneNotifyDelaySec,
     channelPrompt: state.channelPrompt,
     // Shipped default, so the panel can offer "restore" without a second route.
     // Without this, a saved prompt would keep overriding an improved default
@@ -503,6 +505,18 @@ export function apply(ctx) {
         patch.approvalTimeoutSec = Math.round(seconds)
       }
 
+      if (payload && payload.doneNotifyEnabled !== undefined) {
+        patch.doneNotifyEnabled = payload.doneNotifyEnabled === true
+      }
+
+      if (payload && payload.doneNotifyDelaySec !== undefined) {
+        const seconds = Number(payload.doneNotifyDelaySec)
+        if (!Number.isFinite(seconds) || seconds < 5 || seconds > 600) {
+          return json({ ok: false, error: 'doneNotifyDelaySec 需在 5–600 秒之间' }, 400)
+        }
+        patch.doneNotifyDelaySec = Math.round(seconds)
+      }
+
       if (payload && payload.promptRefreshTurns !== undefined) {
         const turns = Number(payload.promptRefreshTurns)
         if (!Number.isFinite(turns) || turns < 1 || turns > 200) {
@@ -540,6 +554,8 @@ export function apply(ctx) {
         approvalTimeoutSec: next.approvalTimeoutSec,
         mediaMergeSec: next.mediaMergeSec,
         promptRefreshTurns: next.promptRefreshTurns,
+        doneNotifyEnabled: next.doneNotifyEnabled,
+        doneNotifyDelaySec: next.doneNotifyDelaySec,
         channelPrompt: next.channelPrompt,
       })
     } catch (error) {

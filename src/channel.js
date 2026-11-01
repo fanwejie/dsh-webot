@@ -28,10 +28,14 @@ import { MESSAGE_TYPE_USER, getUpdates, sendText } from './protocol/messages.js'
 import { downloadMedia, extensionForName } from './protocol/media.js'
 import { sendMediaToWeChat } from './protocol/outbound-media.js'
 import { ANCHOR_REMINDER, composeTail } from './persona.js'
+import { desktopIdleMs } from './presence.js'
 import { appendEventLog, readState, updateState } from './state.js'
 
 /** Longest slice of one answer sent as a single WeChat message. */
 const MAX_REPLY_CHARS = 1200
+
+/** The full session listing is reused for this long; a finished task is not urgent. */
+const SESSION_CACHE_MS = 60_000
 
 /** Pause after a poll or send failure before trying again. */
 const RETRY_MS = 1500
@@ -273,6 +277,13 @@ function shortId(sessionId) {
   return String(sessionId).slice(-6)
 }
 
+/** Last segment of a workspace path, for a readable name in a notification. */
+function baseName(directory) {
+  const trimmed = String(directory || '').replace(/[\\/]+$/, '')
+  const parts = trimmed.split(/[\\/]/).filter(Boolean)
+  return parts.length ? parts[parts.length - 1] : trimmed
+}
+
 /** Best-effort title: `SessionSummary` has none, projections may. */
 function readTitle(item) {
   const values = item && item.projections && item.projections.values
@@ -396,6 +407,10 @@ export function createChannel(options) {
    * process — and its context — just came back.
    */
   const promptMarks = new Map()
+  /** sessionId -> pending "task finished elsewhere" watch timer. */
+  const doneNotices = new Map()
+  /** One listing of every session on the machine, refreshed at most this often. */
+  let sessionCache = { at: 0, items: [] }
   /**
    * sessionId -> sends made through `send_to_wechat` during the current turn.
    *
@@ -548,12 +563,15 @@ export function createChannel(options) {
       } catch (error) {
         note('send', `failed · ${String((error && error.message) || error)}`)
         recordError(account.accountId, error)
-        return
+        // Reported to the caller, not just logged: a notification that claims it was
+        // sent when the send failed is worse than no notification at all.
+        return false
       }
       // A short gap keeps a burst from looking like a machine gun, without
       // pretending to type.
       if (index < list.length - 1) await new Promise((resolve) => setTimeout(resolve, 250))
     }
+    return true
   }
 
   /**
@@ -1375,13 +1393,110 @@ export function createChannel(options) {
     )
   }
 
+  /**
+   * Is this session one this channel owns, and therefore already talking to the
+   * phone?
+   *
+   * `replyTargets` alone is not enough: it is filled while a conversation is live,
+   * and a bound session that has not spoken since the process started is still the
+   * user's WeChat session — notifying about it would be the channel telling the
+   * phone about itself.
+   */
+  function isOwnedSession(sessionId) {
+    if (replyTargets.has(sessionId)) return true
+    const bindings = readState().bindings
+    for (const value of Object.values(bindings)) {
+      if (value && value.sessionId === sessionId) return true
+    }
+    return false
+  }
+
   /** The turn's driver went idle: whatever it drafted is no longer live. */
   function handleAgentStatus(payload) {
     if (!payload || payload.status !== 'idle') return
     const sessionId = sessionIdOf(payload)
     if (!sessionId) return
-    if (!replyTargets.has(sessionId)) return
+    if (!replyTargets.has(sessionId)) {
+      if (isOwnedSession(sessionId)) return
+      // A session this channel does not own just finished. Whether the phone should
+      // hear about it depends on something only the desktop can answer: is anybody
+      // sitting there?
+      scheduleDoneNotice(sessionId)
+      return
+    }
     retireTurnText(sessionId, 'idle')
+  }
+
+  /**
+   * Watch the desk for a while after a task finishes elsewhere.
+   *
+   * The rule is the user's: if the desk stays untouched for `doneNotifyDelaySec`
+   * after the turn ended, nobody is watching, so a message is worth sending. Any
+   * input inside the window cancels it silently — you are right there, reading the
+   * answer yourself.
+   */
+  function scheduleDoneNotice(sessionId) {
+    const state = readState()
+    if (!state.doneNotifyEnabled) return
+    // Nothing bound means nowhere to send; not an error, just off.
+    if (!boundConversationTarget()) return
+
+    const delayMs = (state.doneNotifyDelaySec || 30) * 1000
+    const existing = doneNotices.get(sessionId)
+    if (existing) clearTimeout(existing)
+    const timer = setTimeout(() => {
+      void fireDoneNotice(sessionId, delayMs)
+    }, delayMs)
+    if (typeof timer.unref === 'function') timer.unref()
+    doneNotices.set(sessionId, timer)
+    note('done', `watch ${shortId(sessionId)} | ${Math.round(delayMs / 1000)}s`)
+  }
+
+  /** The window closed: notify unless someone proved they are at the desk. */
+  async function fireDoneNotice(sessionId, delayMs) {
+    doneNotices.delete(sessionId)
+
+    const idleMs = desktopIdleMs()
+    if (idleMs !== null && idleMs < delayMs) {
+      note('done', `skip ${shortId(sessionId)} | input ${Math.round(idleMs / 1000)}s ago`)
+      return
+    }
+    // `null` means the probe could not run. Notifying is the lesser evil: the whole
+    // point is to reach the phone, and silence would look exactly like a task that
+    // never finished.
+    const presence = idleMs === null ? 'unknown (probe failed)' : `${Math.round(idleMs / 1000)}s idle`
+
+    const target = boundConversationTarget()
+    if (!target || !target.contextToken) {
+      note('done', `skip ${shortId(sessionId)} | no bound conversation`)
+      return
+    }
+
+    const { workspace, title } = await describeSession(sessionId)
+    const text = `[系统提示] ${workspace} · ${title} · DSH 已跑完`
+    const ok = await sendReply(target.accountId, target.toUserId, target.contextToken, text)
+    note('done', ok ? `sent | ${presence} | ${workspace} | ${title}` : `failed | ${workspace} | ${title}`)
+  }
+
+  /** Workspace folder and title for a session, from one cached listing. */
+  async function describeSession(sessionId) {
+    let items = sessionCache.items
+    if (Date.now() - sessionCache.at > SESSION_CACHE_MS) {
+      try {
+        const value = await sessionController.list({}, AbortSignal.timeout(8000))
+        if (Array.isArray(value && value.items)) {
+          items = value.items
+          sessionCache = { at: Date.now(), items }
+        }
+      } catch {
+        /* keep the previous listing; the message still goes out with what we have */
+      }
+    }
+    const found = items.find((item) => String(item.sessionId) === sessionId)
+    const cwd = found && found.cwd ? String(found.cwd) : ''
+    const workspace = cwd ? baseName(cwd) : '未知工作区'
+    const title = (found && readTitle(found)) || shortId(sessionId)
+    return { workspace, title }
   }
 
   /**
@@ -1509,6 +1624,8 @@ export function createChannel(options) {
     pendingQuestions.clear()
     // Forget the schedule: a fresh row should introduce itself again.
     promptMarks.clear()
+    for (const timer of doneNotices.values()) clearTimeout(timer)
+    doneNotices.clear()
     // A held file would otherwise be dropped in silence when the row unloads. It is
     // delivered now, without waiting for a window that will never expire.
     for (const key of [...contentBuffers.keys()]) void deliverBuffered(key, '')

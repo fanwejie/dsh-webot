@@ -57,6 +57,17 @@ function clampRefreshTurns(value) {
   return Math.min(MAX_PROMPT_REFRESH_TURNS, Math.max(1, Math.round(turns)))
 }
 
+/** How long to watch for desk activity before deciding nobody is there. */
+const DEFAULT_DONE_NOTIFY_SEC = 30
+const MIN_DONE_NOTIFY_SEC = 5
+const MAX_DONE_NOTIFY_SEC = 600
+
+function clampDoneNotifySeconds(value) {
+  const seconds = Number(value)
+  if (!Number.isFinite(seconds)) return DEFAULT_DONE_NOTIFY_SEC
+  return Math.min(MAX_DONE_NOTIFY_SEC, Math.max(MIN_DONE_NOTIFY_SEC, Math.round(seconds)))
+}
+
 /**
  * Accepted values of `approvalMode`.
  *
@@ -186,6 +197,10 @@ export function normalizeState(raw) {
     mediaMergeSec: clampMergeSeconds(source.mediaMergeSec),
     // Turns between full-prompt resends; 1 means "every turn", as before.
     promptRefreshTurns: clampRefreshTurns(source.promptRefreshTurns),
+    // The one setting that produces messages nobody asked for, so it is off until
+    // it is turned on deliberately.
+    doneNotifyEnabled: source.doneNotifyEnabled === true,
+    doneNotifyDelaySec: clampDoneNotifySeconds(source.doneNotifyDelaySec),
     // `undefined` means "never set", which takes the default; an empty string is
     // a deliberate "off" and stays empty, the same distinction the reference makes
     // with `stored.presenceNote ?? DEFAULT_SETTINGS.presenceNote`.

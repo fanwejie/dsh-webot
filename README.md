@@ -48,6 +48,32 @@ WeChat ──► iLink getupdates (long poll, 35s)
 `send_to_wechat`, so it decides what is said, how many messages there are, and
 whether this turn answers at all.
 
+### Telling the phone when a desk task finishes
+
+The channel also watches sessions it does **not** own. When one of them goes idle
+(the `agent/status` listener is global), it starts a timer and then answers one
+question: *is anybody at this computer?*
+
+- any mouse or keyboard input during the window → you are there, reading it
+  yourself → **stay quiet**;
+- nothing for `doneNotifyDelaySec` (default 30 s) → **send one line**, composed by
+  the channel, not by the model:
+
+```
+[系统提示] weBot · 修一下发送 · DSH 已跑完
+```
+
+Presence comes from Windows itself: `GetLastInputInfo` reports how long since the
+last input *anywhere on the session*, so typing in an editor counts as being at the
+desk — a mouse-only check would call that person away. It is reached through a
+PowerShell spawn (~0.3 s, measured), which is why it runs once per finished task and
+never in a loop.
+
+If the probe cannot run, the message is sent and the log says so: the purpose is to
+reach the phone, and silence would be indistinguishable from a task that never
+finished. Off by default — it is the one setting that produces messages nobody
+typed.
+
 That decision is why this mode replaced auto-forwarding: one answer used to arrive
 as two mismatched messages, because a quiet-period timer fired in the pause a tool
 call creates between model steps, sent the text so far, and the rest followed
