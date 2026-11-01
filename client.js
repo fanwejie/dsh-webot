@@ -619,7 +619,9 @@ window.__ModuleLoader__.load({
      * truncating the name the user is choosing between.
      */
     function Dropdown({ ariaLabel, items, valueId, disabled, onSelect, basis = '260px', minWidth = '180px' }) {
-      const [open, setOpen] = React.useState(false)
+      // 'closing' exists so the element stays mounted for the exit animation; it is
+      // unmounted by a timer when that animation ends.
+      const [phase, setPhase] = React.useState('closed')
       const [box, setBox] = React.useState(null)
       const triggerRef = React.useRef(null)
       const selected = items.find((item) => item.id === valueId) || items[0]
@@ -637,21 +639,42 @@ window.__ModuleLoader__.load({
           '  from { opacity: 0; transform: scaleY(0.85) translateY(-4px); }',
           '  to   { opacity: 1; transform: scaleY(1) translateY(0); }',
           '}',
+          '@keyframes webot-dropdown-out {',
+          '  from { opacity: 1; transform: scaleY(1) translateY(0); }',
+          '  to   { opacity: 0; transform: scaleY(0.9) translateY(-4px); }',
+          '}',
           '.webot-dropdown-in {',
           // Slow on purpose: the list is growing out of the control, not snapping.
           '  animation: webot-dropdown-in 300ms cubic-bezier(0.2, 0.8, 0.2, 1) both;',
           '}',
+          '.webot-dropdown-out {',
+          // A little quicker than the way in; closing should feel decisive.
+          '  animation: webot-dropdown-out 220ms cubic-bezier(0.4, 0, 1, 1) both;',
+          '}',
           '@media (prefers-reduced-motion: reduce) {',
-          '  .webot-dropdown-in { animation: none; }',
+          '  .webot-dropdown-in, .webot-dropdown-out { animation: none; }',
           '}',
         ].join('\n')
         document.head.appendChild(style)
       }, [])
 
+      const CLOSE_MS = 220
+
+      /** Start the exit animation. The element stays until the timer below fires. */
       const close = () => {
-        setOpen(false)
-        setBox(null)
+        setPhase((current) => (current === 'open' ? 'closing' : current))
       }
+
+      React.useEffect(() => {
+        if (phase !== 'closing') return undefined
+        const timer = setTimeout(() => {
+          setPhase('closed')
+          setBox(null)
+        }, CLOSE_MS)
+        // Reopening inside the window changes the phase and cancels this, which is
+        // what makes a second click feel instant instead of waiting out the fade.
+        return () => clearTimeout(timer)
+      }, [phase])
 
       /**
        * Measured placement, not `absolute` inside the row: this row sits at the
@@ -660,7 +683,7 @@ window.__ModuleLoader__.load({
        * flip above the trigger when the window has no room below.
        */
       const toggle = () => {
-        if (open) {
+        if (phase === 'open') {
           close()
           return
         }
@@ -681,7 +704,7 @@ window.__ModuleLoader__.load({
           // edge that touches it.
           origin: flip ? 'bottom center' : 'top center',
         })
-        setOpen(true)
+        setPhase('open')
       }
 
       return h(
@@ -694,7 +717,7 @@ window.__ModuleLoader__.load({
             type: 'button',
             disabled: disabled === true,
             'aria-haspopup': 'listbox',
-            'aria-expanded': open ? 'true' : 'false',
+            'aria-expanded': phase === 'open' ? 'true' : 'false',
             'aria-label': ariaLabel,
             onClick: toggle,
             style: {
@@ -724,19 +747,19 @@ window.__ModuleLoader__.load({
           ),
           h('span', { style: { flex: '0 0 auto', opacity: 0.6 } }, '▾'),
         ),
-        open && box
+        phase === 'open' && box
           ? h('div', {
               // Behind the list, above everything else: clicking anywhere else closes.
               style: { position: 'fixed', inset: 0, zIndex: 1290 },
               onClick: close,
             })
           : null,
-        open && box
+        phase !== 'closed' && box
           ? h(
               'div',
               {
                 role: 'listbox',
-                className: 'webot-dropdown-in',
+                className: phase === 'closing' ? 'webot-dropdown-out' : 'webot-dropdown-in',
                 style: {
                   position: 'fixed',
                   left: box.left + 'px',
@@ -751,6 +774,8 @@ window.__ModuleLoader__.load({
                   border: '1px solid var(--dsw-alias-border-l2)',
                   background: 'var(--dsw-alias-bg-base)',
                   boxShadow: 'var(--dsw-elevation-prominent)',
+                  // A list on its way out must not swallow the click that dismisses it.
+                  pointerEvents: phase === 'closing' ? 'none' : 'auto',
                   // Grows away from the control it belongs to.
                   transformOrigin: box.origin,
                 },
