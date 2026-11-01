@@ -91,6 +91,32 @@ would only produce literal text. The tone is unchanged. The file's header commen
 records the source and the changes; `readRole` strips that comment before
 injection.
 
+### Reply bubbles
+
+An agent answer is split into separate WeChat messages at sentence boundaries —
+`。！？!?…`, newlines, and closing Chinese quotes (`」”』`), because that is where a
+person stops and starts a new bubble:
+
+```
+你要说的事最好别是“在吗”之后接一句广告。
+  -> 你要说的事最好别是“在吗”
+     之后接一句广告。
+```
+
+Guards, each for a specific failure:
+
+- **At most 4 bubbles.** The tail merges back into the last one; more reads as
+  spam rather than as texting.
+- **Structured answers never split** — a code fence, a list marker or a table
+  carries meaning across its line breaks, and chopping it turns one readable answer
+  into several broken fragments.
+- **Command receipts never bubble.** `/help` and `/list` are one message; splitting
+  them into ten would be worse than a wall of text.
+- **Work mode never bubbles** — that register is meant to answer in one piece.
+- The ASCII `"` is deliberately *not* a boundary: it appears inside code and
+  English, where a split would be wrong.
+- 250 ms between bubbles, so a burst does not look like a machine gun.
+
 **Why the card is prepended rather than registered as a prompt section.** The
 correct home is a section on the *agent's* context so it is scoped to WeChat
 sessions, but `systemPrompt.section()` registers globally for the calling context,

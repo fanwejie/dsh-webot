@@ -119,6 +119,65 @@ function splitReply(text) {
   return parts
 }
 
+/**
+ * Characters that end a bubble when the answer is prose.
+ *
+ * Closing Chinese quotes are included on purpose: a quoted phrase is where a
+ * person stops and starts a new message ("…别是"在吗"" / "之后接一句广告"), and the
+ * ASCII quote is deliberately absent — it shows up inside code and English, where
+ * a split would be wrong.
+ */
+const BUBBLE_ENDERS = new Set(['。', '！', '？', '!', '?', '…', '\n', '」', '”', '』'])
+
+/** More bubbles than this reads as spam; the tail is merged back instead. */
+const MAX_BUBBLES = 4
+
+/**
+ * A structured answer must never be chopped into bubbles.
+ *
+ * Code fences, list markers and tables carry meaning across their line breaks, and
+ * splitting them turns one readable answer into several broken fragments.
+ */
+const STRUCTURED = /```|^\s*[-*]\s|^\s*\d+\.\s|^\s*\|/m
+
+/**
+ * Split one agent answer into separate WeChat messages, one per sentence.
+ *
+ * This is what makes a reply read like texting instead of a wall: "你要说的事最好
+ * 别是在吗" and "之后接一句广告" arrive as two bubbles. Only prose is split — a
+ * structured answer, or anything past {@link MAX_BUBBLES}, falls back to the plain
+ * size-based chunking.
+ */
+function splitBubbles(text) {
+  const trimmed = String(text || '').trim()
+  if (!trimmed) return []
+  if (STRUCTURED.test(trimmed)) return splitReply(trimmed)
+
+  const sentences = []
+  let buffer = ''
+  for (const char of trimmed) {
+    buffer += char
+    if (BUBBLE_ENDERS.has(char)) {
+      const sentence = buffer.trim()
+      if (sentence) sentences.push(sentence)
+      buffer = ''
+    }
+  }
+  if (buffer.trim()) sentences.push(buffer.trim())
+
+  if (sentences.length <= 1) return splitReply(trimmed)
+
+  if (sentences.length > MAX_BUBBLES) {
+    const head = sentences.slice(0, MAX_BUBBLES - 1)
+    // Joined without a separator: the pieces are already trimmed fragments of the
+    // same sentence run, and a space would show up in the bubble.
+    head.push(sentences.slice(MAX_BUBBLES - 1).join(''))
+    return head.flatMap((part) => splitReply(part))
+  }
+
+  return sentences.flatMap((part) => splitReply(part))
+}
+
 /** Commands handled by the channel itself; anything else reaches the agent. */
 const KNOWN_COMMANDS = new Set([
   'help',
@@ -367,13 +426,22 @@ export function createChannel(options) {
   }
 
   /** Send one reply to a conversation, splitting it to WeChat-sized pieces. */
-  async function sendReply(accountId, toUserId, contextToken, text) {
+  async function sendReply(accountId, toUserId, contextToken, text, options = {}) {
     const account = readState().accounts.find((entry) => entry.accountId === accountId)
     if (!account) {
       note('send', 'no account')
       return
     }
-    for (const part of splitReply(text)) {
+
+    // Only agent answers are bubbled. Command receipts (help, listings) must stay
+    // one message — splitting `/help` into ten bubbles is worse than a wall of
+    // text — and work mode deliberately answers in one piece.
+    const bubble = options.bubbles === true && readState().personaMode !== 'work'
+    const parts = bubble ? splitBubbles(text) : splitReply(text)
+    const list = parts.length > 0 ? parts : [String(text || '')]
+
+    for (let index = 0; index < list.length; index += 1) {
+      const part = list[index]
       try {
         await sendText({
           baseUrl: account.baseUrl,
@@ -382,13 +450,16 @@ export function createChannel(options) {
           text: part,
           contextToken,
         })
-        note('send', `ok · ${part.length} chars`)
+        note('send', `ok · ${part.length} chars${list.length > 1 ? ` (${index + 1}/${list.length})` : ''}`)
         clearError(account.accountId)
       } catch (error) {
         note('send', `failed · ${String((error && error.message) || error)}`)
         recordError(account.accountId, error)
         return
       }
+      // A short gap keeps a burst from looking like a machine gun, without
+      // pretending to type.
+      if (index < list.length - 1) await new Promise((resolve) => setTimeout(resolve, 250))
     }
   }
 
@@ -990,7 +1061,9 @@ export function createChannel(options) {
     }
 
     note('flush', `${sessionId} · ${text.length} chars`)
-    await sendReply(target.accountId, target.toUserId, target.contextToken, text)
+    // This is the one path that carries an agent answer, so it is the one that
+    // asks for bubble splitting.
+    await sendReply(target.accountId, target.toUserId, target.contextToken, text, { bubbles: true })
   }
 
   function scheduleFlush(sessionId) {
