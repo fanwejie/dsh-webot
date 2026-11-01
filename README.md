@@ -128,6 +128,12 @@ person stops and starts a new bubble:
 
 Guards, each for a specific failure:
 
+- **A boundary only counts when a new thought follows.** Closing quotes end a
+  bubble, but not when the next non-space character is `，、；：` — that is
+  mid-sentence, and splitting there left a bubble opening with a comma
+  (`他说“在吗”，然后…`). Reported from a real reply reading "，在吗".
+- **A fragment that is only punctuation rejoins the previous bubble.** Splitting at
+  `？` inside quotes otherwise produced a bubble containing nothing but `”`.
 - **At most 4 bubbles.** The tail merges back into the last one; more reads as
   spam rather than as texting.
 - **Structured answers never split** — a code fence, a list marker or a table
@@ -135,7 +141,6 @@ Guards, each for a specific failure:
   into several broken fragments.
 - **Command receipts never bubble.** `/help` and `/list` are one message; splitting
   them into ten would be worse than a wall of text.
-- **Work mode never bubbles** — that register is meant to answer in one piece.
 - The ASCII `"` is deliberately *not* a boundary: it appears inside code and
   English, where a split would be wrong.
 - 250 ms between bubbles, so a burst does not look like a machine gun.

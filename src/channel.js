@@ -129,6 +129,22 @@ function splitReply(text) {
  */
 const BUBBLE_ENDERS = new Set(['。', '！', '？', '!', '?', '…', '\n', '」', '”', '』'])
 
+/**
+ * Punctuation that cannot open a sentence.
+ *
+ * A closing quote followed by one of these is mid-sentence ("他说"在吗"，然后…"), so
+ * the boundary is not a boundary. Without this, the comma is left dangling at the
+ * start of the next bubble — which is exactly how a bubble came out reading "，在吗".
+ */
+const CONTINUATION = new Set(['，', ',', '、', '；', ';', '：', ':'])
+
+/** True when the next non-space character continues the same sentence. */
+function continuesSentence(text, from) {
+  let index = from
+  while (index < text.length && /\s/.test(text[index])) index += 1
+  return index < text.length && CONTINUATION.has(text[index])
+}
+
 /** More bubbles than this reads as spam; the tail is merged back instead. */
 const MAX_BUBBLES = 4
 
@@ -155,15 +171,36 @@ function splitBubbles(text) {
 
   const sentences = []
   let buffer = ''
-  for (const char of trimmed) {
+  for (let index = 0; index < trimmed.length; index += 1) {
+    const char = trimmed[index]
     buffer += char
-    if (BUBBLE_ENDERS.has(char)) {
-      const sentence = buffer.trim()
-      if (sentence) sentences.push(sentence)
-      buffer = ''
-    }
+    if (!BUBBLE_ENDERS.has(char)) continue
+    // A boundary only counts when what follows starts a new thought.
+    if (continuesSentence(trimmed, index + 1)) continue
+    const sentence = buffer.trim()
+    if (sentence) sentences.push(sentence)
+    buffer = ''
   }
   if (buffer.trim()) sentences.push(buffer.trim())
+
+  // Belt and braces: a fragment that still opens with punctuation belongs to the
+  // bubble before it, and a fragment that is *only* punctuation is the tail of the
+  // previous one — "“在吗？”" must not produce a bubble containing just a quote.
+  // No message a person sends starts with a comma or is a lone bracket.
+  for (let index = sentences.length - 1; index > 0; index -= 1) {
+    const current = sentences[index]
+    if (/^[\p{P}\p{S}\s]+$/u.test(current)) {
+      sentences[index - 1] += current
+      sentences.splice(index, 1)
+      continue
+    }
+    const match = /^[，,、；;：:]+/.exec(current)
+    if (!match) continue
+    sentences[index - 1] += match[0]
+    const rest = current.slice(match[0].length).trim()
+    if (rest) sentences[index] = rest
+    else sentences.splice(index, 1)
+  }
 
   if (sentences.length <= 1) return splitReply(trimmed)
 
