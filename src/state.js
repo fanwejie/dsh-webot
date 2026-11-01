@@ -68,6 +68,13 @@ function clampDoneNotifySeconds(value) {
   return Math.min(MAX_DONE_NOTIFY_SEC, Math.max(MIN_DONE_NOTIFY_SEC, Math.round(seconds)))
 }
 
+/** Integer clamp with a fallback, for the knobs that are plain limits. */
+function clampInt(value, min, max, fallback) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return fallback
+  return Math.min(max, Math.max(min, Math.round(number)))
+}
+
 /**
  * Accepted values of `approvalMode`.
  *
@@ -201,6 +208,14 @@ export function normalizeState(raw) {
     // it is turned on deliberately.
     doneNotifyEnabled: source.doneNotifyEnabled === true,
     doneNotifyDelaySec: clampDoneNotifySeconds(source.doneNotifyDelaySec),
+    // Pointer travel that counts as "a person at the desk", not a bump.
+    presenceTravelPx: clampInt(source.presenceTravelPx, 20, 1000, 120),
+    // Longest single WeChat message before it is split by size.
+    maxReplyChars: clampInt(source.maxReplyChars, 200, 4000, 1200),
+    // Attachments taken from one inbound message; any beyond this are ignored.
+    mediaMaxPerMessage: clampInt(source.mediaMaxPerMessage, 1, 10, 3),
+    // Rows `/list` prints before it stops.
+    maxListRows: clampInt(source.maxListRows, 3, 30, 10),
     // `undefined` means "never set", which takes the default; an empty string is
     // a deliberate "off" and stays empty, the same distinction the reference makes
     // with `stored.presenceNote ?? DEFAULT_SETTINGS.presenceNote`.

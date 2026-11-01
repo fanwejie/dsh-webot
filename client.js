@@ -421,6 +421,58 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /**
+     * One numeric setting: a label with its `?`, the box, and its unit.
+     *
+     * Every numeric setting used to carry its own draft state and commit function —
+     * eight copies of the same four rules (empty reverts, out of range clamps, Enter
+     * and blur both commit, a save failure surfaces). One component now owns them.
+     */
+    function NumberField({ t, label, hint, unit, value, min, max, fallback, disabled, onCommit }) {
+      const [draft, setDraft] = React.useState(null)
+
+      const commit = () => {
+        if (draft === null) return
+        const raw = String(draft).trim()
+        if (raw === '') {
+          setDraft(null)
+          return
+        }
+        const number = Number(raw)
+        if (!Number.isFinite(number)) {
+          setDraft(null)
+          return
+        }
+        const clamped = Math.min(max, Math.max(min, Math.round(number)))
+        setDraft(String(clamped))
+        onCommit(clamped)
+      }
+
+      return h(
+        'div',
+        { style: { ...FIELD_ROW, alignItems: 'center' } },
+        h('span', { style: FIELD_NAME }, label, hint ? h(Hint, { t, text: hint }) : null),
+        h('input', {
+          type: 'number',
+          min,
+          max,
+          disabled: disabled === true,
+          value: draft === null ? String(value ?? fallback) : draft,
+          onChange: (event) => setDraft(event.target.value),
+          onBlur: commit,
+          onKeyDown: (event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault()
+              event.currentTarget.blur()
+            }
+          },
+          'aria-label': label,
+          style: { ...TEXT_INPUT, width: '80px', letterSpacing: 'normal', opacity: disabled ? 0.5 : 1 },
+        }),
+        unit ? h('span', { style: { ...MUTED, margin: 0 } }, unit) : null,
+      )
+    }
+
     /* ------------------------------------------------------------------ *
      * The channel body: status, binding, and the QR handshake
      * ------------------------------------------------------------------ */
@@ -539,111 +591,6 @@ window.__ModuleLoader__.load({
       const [picker, setPicker] = React.useState(false)
       const [sessions, setSessions] = React.useState({ phase: 'idle' })
       const [bindError, setBindError] = React.useState('')
-      const [mergeDraft, setMergeDraft] = React.useState(null)
-      const [refreshDraft, setRefreshDraft] = React.useState(null)
-      const [doneDraft, setDoneDraft] = React.useState(null)
-
-      /** Commit the done-notification delay; same contract as the other numbers. */
-      function commitDone() {
-        if (doneDraft === null) return
-        const raw = String(doneDraft).trim()
-        if (raw === '') {
-          setDoneDraft(null)
-          return
-        }
-        const seconds = Number(raw)
-        if (!Number.isFinite(seconds)) {
-          setDoneDraft(null)
-          return
-        }
-        const clamped = Math.min(600, Math.max(5, Math.round(seconds)))
-        setDoneDraft(String(clamped))
-        setBindError('')
-        post(SETTINGS_URL, { doneNotifyDelaySec: clamped })
-          .then((body) => {
-            if (!body || body.ok !== true) {
-              setBindError((body && body.error) || t('bind.failed'))
-              setDoneDraft(null)
-              return
-            }
-            refreshStatus()
-            setDoneDraft(null)
-          })
-          .catch((error) => {
-            setBindError((error && error.message) || String(error))
-            setDoneDraft(null)
-          })
-      }
-
-      /** Commit the prompt-refresh draft; same contract as the other number fields. */
-      function commitRefresh() {
-        if (refreshDraft === null) return
-        const raw = String(refreshDraft).trim()
-        if (raw === '') {
-          setRefreshDraft(null)
-          return
-        }
-        const turns = Number(raw)
-        if (!Number.isFinite(turns)) {
-          setRefreshDraft(null)
-          return
-        }
-        const clamped = Math.min(200, Math.max(1, Math.round(turns)))
-        setRefreshDraft(String(clamped))
-        setBindError('')
-        post(SETTINGS_URL, { promptRefreshTurns: clamped })
-          .then((body) => {
-            if (!body || body.ok !== true) {
-              setBindError((body && body.error) || t('bind.failed'))
-              setRefreshDraft(null)
-              return
-            }
-            refreshStatus()
-            setRefreshDraft(null)
-          })
-          .catch((error) => {
-            setBindError((error && error.message) || String(error))
-            setRefreshDraft(null)
-          })
-      }
-
-      /** Commit the merge-window draft; same contract as the timeout field. */
-      function commitMerge() {
-        if (mergeDraft === null) return
-        const raw = String(mergeDraft).trim()
-        if (raw === '') {
-          setMergeDraft(null)
-          return
-        }
-        const seconds = Number(raw)
-        if (!Number.isFinite(seconds)) {
-          setMergeDraft(null)
-          return
-        }
-        const clamped = Math.min(300, Math.max(0, Math.round(seconds)))
-        setMergeDraft(String(clamped))
-        setBindError('')
-        post(SETTINGS_URL, { mediaMergeSec: clamped })
-          .then((body) => {
-            if (!body || body.ok !== true) {
-              setBindError((body && body.error) || t('bind.failed'))
-              setMergeDraft(null)
-              return
-            }
-            refreshStatus()
-            setMergeDraft(null)
-          })
-          .catch((error) => {
-            setBindError((error && error.message) || String(error))
-            setMergeDraft(null)
-          })
-      }
-
-      // `null` means "not editing": the box shows the saved value. While editing it
-      // holds exactly what was typed, including the empty string — a controlled
-      // input that falls back to the saved value whenever the draft is empty can
-      // never be cleared, which is why editing 30 down to 5 needed a workaround.
-      const [timeoutDraft, setTimeoutDraft] = React.useState(null)
 
       function loadSessions() {
         setSessions({ phase: 'loading' })
@@ -718,55 +665,6 @@ window.__ModuleLoader__.load({
             refreshStatus()
           })
           .catch((error) => setBindError((error && error.message) || String(error)))
-      }
-
-      /**
-       * Commit the timeout draft. Called on Enter and on blur only.
-       *
-       * The draft is `null` when the box is not being edited, which makes it show
-       * the saved value; while editing it holds exactly what was typed, including
-       * `''`. Resolution happens only here:
-       *
-       *   empty / not a number -> revert to the saved value
-       *   in range             -> submit
-       *   out of range         -> clamp into 5..300 and submit the clamped value
-       */
-      function commitTimeout() {
-        if (timeoutDraft === null) return
-        const raw = String(timeoutDraft).trim()
-
-        if (raw === '') {
-          setTimeoutDraft(null)
-          return
-        }
-        const seconds = Number(raw)
-        if (!Number.isFinite(seconds)) {
-          setTimeoutDraft(null)
-          return
-        }
-
-        const clamped = Math.min(300, Math.max(5, Math.round(seconds)))
-        // Show the corrected number immediately, then persist it.
-        setTimeoutDraft(String(clamped))
-        void setApprovalTimeout(clamped)
-      }
-
-      function setApprovalTimeout(seconds) {
-        setBindError('')
-        post(SETTINGS_URL, { approvalTimeoutSec: seconds })
-          .then((body) => {
-            if (!body || body.ok !== true) {
-              setBindError((body && body.error) || t('bind.failed'))
-              setTimeoutDraft(null)
-              return
-            }
-            refreshStatus()
-            setTimeoutDraft(null)
-          })
-          .catch((error) => {
-            setBindError((error && error.message) || String(error))
-            setTimeoutDraft(null)
-          })
       }
 
       function renderPicker() {
@@ -936,79 +834,72 @@ window.__ModuleLoader__.load({
               h('option', { value: 'desktop' }, t('approval.desktop')),
             ),
           ),
-          h(
-            'div',
-            { style: { ...FIELD_ROW, alignItems: 'center' } },
-            h('span', { style: FIELD_NAME }, t('approval.timeout'), h(Hint, { t, text: t('approval.timeoutHint') })),
-            h('input', {
-              type: 'number',
-              min: 5,
-              max: 300,
-              value:
-                timeoutDraft === null
-                  ? String(status.data.approvalTimeoutSec || 30)
-                  : timeoutDraft,
-              onChange: (event) => setTimeoutDraft(event.target.value),
-              onBlur: commitTimeout,
-              onKeyDown: (event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  event.currentTarget.blur()
-                }
-              },
-              'aria-label': t('approval.timeout'),
-              style: { ...TEXT_INPUT, width: '80px', letterSpacing: 'normal' },
-            }),
-            h('span', { style: { ...MUTED, margin: 0 } }, t('approval.timeoutUnit')),
-          ),
-          h(
-            'div',
-            { style: { ...FIELD_ROW, alignItems: 'center' } },
-            h('span', { style: FIELD_NAME }, t('merge.label'), h(Hint, { t, text: t('merge.hint') })),
-            h('input', {
-              type: 'number',
-              min: 0,
-              max: 300,
-              value:
-                mergeDraft === null ? String(status.data.mediaMergeSec ?? 20) : mergeDraft,
-              onChange: (event) => setMergeDraft(event.target.value),
-              onBlur: commitMerge,
-              onKeyDown: (event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  event.currentTarget.blur()
-                }
-              },
-              'aria-label': t('merge.label'),
-              style: { ...TEXT_INPUT, width: '80px', letterSpacing: 'normal' },
-            }),
-            h('span', { style: { ...MUTED, margin: 0 } }, t('merge.unit')),
-          ),
-          h(
-            'div',
-            { style: { ...FIELD_ROW, alignItems: 'center' } },
-            h('span', { style: FIELD_NAME }, t('promptRefresh.label'), h(Hint, { t, text: t('promptRefresh.hint') })),
-            h('input', {
-              type: 'number',
-              min: 1,
-              max: 200,
-              value:
-                refreshDraft === null
-                  ? String(status.data.promptRefreshTurns ?? 20)
-                  : refreshDraft,
-              onChange: (event) => setRefreshDraft(event.target.value),
-              onBlur: commitRefresh,
-              onKeyDown: (event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  event.currentTarget.blur()
-                }
-              },
-              'aria-label': t('promptRefresh.label'),
-              style: { ...TEXT_INPUT, width: '80px', letterSpacing: 'normal' },
-            }),
-            h('span', { style: { ...MUTED, margin: 0 } }, t('promptRefresh.unit')),
-          ),
+          h(NumberField, {
+            t,
+            label: t('approval.timeout'),
+            hint: t('approval.timeoutHint'),
+            unit: t('approval.timeoutUnit'),
+            value: status.data.approvalTimeoutSec,
+            min: 5,
+            max: 300,
+            fallback: 30,
+            onCommit: (value) => postSettings({ approvalTimeoutSec: value }),
+          }),
+          h(NumberField, {
+            t,
+            label: t('merge.label'),
+            hint: t('merge.hint'),
+            unit: t('merge.unit'),
+            value: status.data.mediaMergeSec,
+            min: 0,
+            max: 300,
+            fallback: 20,
+            onCommit: (value) => postSettings({ mediaMergeSec: value }),
+          }),
+          h(NumberField, {
+            t,
+            label: t('merge.maxMedia'),
+            hint: t('merge.maxMediaHint'),
+            unit: t('merge.maxMediaUnit'),
+            value: status.data.mediaMaxPerMessage,
+            min: 1,
+            max: 10,
+            fallback: 3,
+            onCommit: (value) => postSettings({ mediaMaxPerMessage: value }),
+          }),
+          h(NumberField, {
+            t,
+            label: t('promptRefresh.label'),
+            hint: t('promptRefresh.hint'),
+            unit: t('promptRefresh.unit'),
+            value: status.data.promptRefreshTurns,
+            min: 1,
+            max: 200,
+            fallback: 20,
+            onCommit: (value) => postSettings({ promptRefreshTurns: value }),
+          }),
+          h(NumberField, {
+            t,
+            label: t('reply.max.label'),
+            hint: t('reply.max.hint'),
+            unit: t('reply.max.unit'),
+            value: status.data.maxReplyChars,
+            min: 200,
+            max: 4000,
+            fallback: 1200,
+            onCommit: (value) => postSettings({ maxReplyChars: value }),
+          }),
+          h(NumberField, {
+            t,
+            label: t('list.max.label'),
+            hint: t('list.max.hint'),
+            unit: t('list.max.unit'),
+            value: status.data.maxListRows,
+            min: 3,
+            max: 30,
+            fallback: 10,
+            onCommit: (value) => postSettings({ maxListRows: value }),
+          }),
           h(
             'div',
             { style: { ...FIELD_ROW, alignItems: 'center' } },
@@ -1016,35 +907,36 @@ window.__ModuleLoader__.load({
             h('input', {
               type: 'checkbox',
               checked: status.data.doneNotifyEnabled === true,
-              onChange: (event) => {
-                const checked = Boolean(event.target.checked)
-                setBindError('')
-                postSettings({ doneNotifyEnabled: checked })
-              },
+              onChange: (event) => postSettings({ doneNotifyEnabled: Boolean(event.target.checked) }),
               'aria-label': t('done.label'),
               style: { width: '14px', height: '14px', margin: 0, accentColor: 'var(--dsw-alias-brand-primary)' },
             }),
             h('span', { style: { ...MUTED, margin: 0 } }, t('done.unit')),
-            h('input', {
-              type: 'number',
-              min: 5,
-              max: 600,
-              disabled: status.data.doneNotifyEnabled !== true,
-              value:
-                doneDraft === null ? String(status.data.doneNotifyDelaySec ?? 30) : doneDraft,
-              onChange: (event) => setDoneDraft(event.target.value),
-              onBlur: commitDone,
-              onKeyDown: (event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  event.currentTarget.blur()
-                }
-              },
-              'aria-label': t('done.delay'),
-              style: { ...TEXT_INPUT, width: '72px', letterSpacing: 'normal' },
-            }),
-            h('span', { style: { ...MUTED, margin: 0 } }, t('done.delayUnit')),
           ),
+          h(NumberField, {
+            t,
+            label: t('done.delay'),
+            hint: t('done.delayHint'),
+            unit: t('done.delayUnit'),
+            value: status.data.doneNotifyDelaySec,
+            min: 5,
+            max: 600,
+            fallback: 30,
+            disabled: status.data.doneNotifyEnabled !== true,
+            onCommit: (value) => postSettings({ doneNotifyDelaySec: value }),
+          }),
+          h(NumberField, {
+            t,
+            label: t('done.travelLabel'),
+            hint: t('done.travelHint'),
+            unit: t('done.travelUnit'),
+            value: status.data.presenceTravelPx,
+            min: 20,
+            max: 1000,
+            fallback: 120,
+            disabled: status.data.doneNotifyEnabled !== true,
+            onCommit: (value) => postSettings({ presenceTravelPx: value }),
+          }),
           h(
             'div',
             {
@@ -1417,16 +1309,30 @@ window.__ModuleLoader__.load({
       'merge.label': '文件合并',
       'merge.unit': '秒内追加的文字会跟文件一起发',
       'merge.hint': '发图/文件后等这么多秒：期间你打字就并成一条发给 agent，没打就等到点再发。填 0 = 不等，立刻发。',
+      'merge.maxMedia': '单次附件数',
+      'merge.maxMediaUnit': '个（超出部分忽略）',
+      'merge.maxMediaHint': '一条微信消息里带好几张图时，最多处理几个。多出来的不会下载，也不会进会话。',
+      'reply.max.label': '单条消息上限',
+      'reply.max.unit': '字（超过就切开分条发）',
+      'reply.max.hint': '一条微信消息最多容纳多少字。超长回复会优先在换行和句号处断开，分成几条发出。',
+      'list.max.label': '/list 行数',
+      'list.max.unit': '行（超出不显示）',
+      'list.max.hint': '在微信里发 /list 时最多列几行会话。手机上一屏看不完太长也没用。',
       'promptRefresh.label': '提示词重发',
       'promptRefresh.unit': '轮完整发一次',
       'done.label': '任务完成提醒',
       'done.unit': '打开后：别的会话跑完，你',
       'done.delay': '等待秒数',
-      'done.delayUnit': '秒内鼠标移动不到 4 个光标距离，就发微信告诉你',
+      'done.delayUnit': '秒内鼠标动得不多，就发微信告诉你',
+      'done.delayHint': '任务结束后盯这么久再决定要不要提醒你。',
+      'done.travelLabel': '鼠标阈值',
+      'done.travelUnit': 'px（累计移动超过它就算你在电脑前）',
+      'done.travelHint':
+        '判定"人在电脑前"需要鼠标累计移动多少像素。默认 120px 约等于 4 个光标的长度：桌子震动、手碰一下鼠标远达不到，所以不会取消提醒；你真的去动鼠标，一下就会超过。',
       'done.hint':
         '只提醒别的会话（微信自己的会话不提醒，它本来就会回你）。'
-        + '判定方式：任务结束后连续采样鼠标位置这么久，累计移动不到 120px（约 4 个光标距离）就当人不在，发一条"[系统提示] 工作区 · 会话 · DSH 已跑完"到微信；移动超过这个距离、或期间一直在敲键盘，就认为你在电脑前，不打扰你。'
-        + '桌子震动、手碰一下鼠标不会取消提醒——这正是设阈值的意义。'
+        + '判定方式：任务结束后连续采样鼠标位置，累计移动小于上面的阈值就当人不在，发一条"[系统提示] 工作区 · 会话 · DSH 已跑完"到微信；超过阈值、或期间一直在敲键盘，就认为你在电脑前，不打扰你。'
+        + '这条消息由通道直接发出，不经过 AI。'
         + '需要读 Windows 的鼠标位置，所以每次判定会起一个 PowerShell 进程，跑满整个窗口。',
       'promptRefresh.hint': '完整提示词不再每条都发；平时只带一句"必须调工具"的提醒。改提示词后会自动重发一次。',
       'persona.heading': '提示词',
@@ -1522,15 +1428,30 @@ window.__ModuleLoader__.load({
       'merge.unit': 'seconds to wait for your follow-up text',
       'merge.hint':
         'After a file: text you type within this window is sent together with it; silence sends the file on its own. 0 = never wait.',
+      'merge.maxMedia': 'Attachments per message',
+      'merge.maxMediaUnit': 'files (the rest are ignored)',
+      'merge.maxMediaHint':
+        'When one WeChat message carries several pictures, how many are handled. The rest are neither downloaded nor sent on.',
+      'reply.max.label': 'Longest message',
+      'reply.max.unit': 'characters (split above this)',
+      'reply.max.hint':
+        'How much text one WeChat message may hold. A longer answer is cut at a newline or full stop and sent as several messages.',
+      'list.max.label': '/list rows',
+      'list.max.unit': 'rows (the rest are hidden)',
+      'list.max.hint': 'How many sessions `/list` prints. A phone screen cannot hold more than that anyway.',
       'promptRefresh.label': 'Prompt refresh',
       'promptRefresh.unit': 'turns between full resends',
       'done.label': 'Task finished',
       'done.unit': 'Notify me when another session finishes, if the pointer moves less than',
       'done.delay': 'Wait seconds',
-      'done.delayUnit': 'seconds — under ~4 pointer widths in total',
+      'done.delayUnit': 'seconds, watching how far the pointer travels',
+      'done.delayHint': 'How long to watch the desk before deciding whether to notify.',
+      'done.travelLabel': 'Pointer threshold',
+      'done.travelUnit': 'px (more travel than this means you are there)',
+      'done.travelHint':
+        'How far the pointer must travel in total to count as "somebody is here". The default 120 px is about four pointer widths: a bumped desk or a hand brushing the mouse is nowhere near it, so the reminder survives; reaching for the mouse clears it immediately.',
       'done.hint':
-        'Only sessions other than the WeChat one (that one already answers you). After a task ends the pointer is sampled for this long: total travel under 120 px (about four pointer widths) means nobody is sitting there, so it sends "[系统提示] workspace · session · DSH 已跑完" straight to WeChat, without the AI. More travel than that, or steady typing, means you are at the desk and it stays quiet. '
-        + 'A bumped desk no longer cancels the reminder — that is what the threshold is for. '
+        'Only sessions other than the WeChat one (that one already answers you). After a task ends the pointer is sampled: total travel below the threshold means nobody is sitting there, so it sends "[系统提示] workspace · session · DSH 已跑完" straight to WeChat, without the AI. More travel than that, or steady typing, means you are at the desk and it stays quiet. '
         + 'Reading the pointer needs one PowerShell process per decision, alive for the whole window.',
       'promptRefresh.hint':
         'The full prompt is no longer sent every message; a one-line tool reminder goes out each turn. Editing the prompt triggers a resend.',

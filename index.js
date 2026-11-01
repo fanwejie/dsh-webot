@@ -32,7 +32,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.22.0'
+const VERSION = '0.23.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -126,6 +126,10 @@ function readStatus() {
     promptRefreshTurns: state.promptRefreshTurns,
     doneNotifyEnabled: state.doneNotifyEnabled,
     doneNotifyDelaySec: state.doneNotifyDelaySec,
+    presenceTravelPx: state.presenceTravelPx,
+    maxReplyChars: state.maxReplyChars,
+    mediaMaxPerMessage: state.mediaMaxPerMessage,
+    maxListRows: state.maxListRows,
     channelPrompt: state.channelPrompt,
     // Shipped default, so the panel can offer "restore" without a second route.
     // Without this, a saved prompt would keep overriding an improved default
@@ -517,6 +521,21 @@ export function apply(ctx) {
         patch.doneNotifyDelaySec = Math.round(seconds)
       }
 
+      // The limit-style knobs share one shape: an integer inside a fixed range.
+      for (const [key, min, max] of [
+        ['presenceTravelPx', 20, 1000],
+        ['maxReplyChars', 200, 4000],
+        ['mediaMaxPerMessage', 1, 10],
+        ['maxListRows', 3, 30],
+      ]) {
+        if (!payload || payload[key] === undefined) continue
+        const value = Number(payload[key])
+        if (!Number.isFinite(value) || value < min || value > max) {
+          return json({ ok: false, error: `${key} 需在 ${min}–${max} 之间` }, 400)
+        }
+        patch[key] = Math.round(value)
+      }
+
       if (payload && payload.promptRefreshTurns !== undefined) {
         const turns = Number(payload.promptRefreshTurns)
         if (!Number.isFinite(turns) || turns < 1 || turns > 200) {
@@ -556,6 +575,10 @@ export function apply(ctx) {
         promptRefreshTurns: next.promptRefreshTurns,
         doneNotifyEnabled: next.doneNotifyEnabled,
         doneNotifyDelaySec: next.doneNotifyDelaySec,
+        presenceTravelPx: next.presenceTravelPx,
+        maxReplyChars: next.maxReplyChars,
+        mediaMaxPerMessage: next.mediaMaxPerMessage,
+        maxListRows: next.maxListRows,
         channelPrompt: next.channelPrompt,
       })
     } catch (error) {

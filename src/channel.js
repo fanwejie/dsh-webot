@@ -116,14 +116,15 @@ function mediaPayload(item) {
 }
 
 /** Split one answer into WeChat-sized pieces, preferring newline boundaries. */
-function splitReply(text) {
-  if (text.length <= MAX_REPLY_CHARS) return [text]
+function splitReply(text, limit = MAX_REPLY_CHARS) {
+  const max = Number(limit) > 0 ? Number(limit) : MAX_REPLY_CHARS
+  if (text.length <= max) return [text]
   const parts = []
   let rest = text
-  while (rest.length > MAX_REPLY_CHARS) {
-    const window = rest.slice(0, MAX_REPLY_CHARS)
+  while (rest.length > max) {
+    const window = rest.slice(0, max)
     const cut = Math.max(window.lastIndexOf('\n'), window.lastIndexOf('。'), window.lastIndexOf('. '))
-    const end = cut > MAX_REPLY_CHARS * 0.4 ? cut + 1 : MAX_REPLY_CHARS
+    const end = cut > max * 0.4 ? cut + 1 : max
     parts.push(rest.slice(0, end))
     rest = rest.slice(end)
   }
@@ -200,7 +201,7 @@ const STRUCTURED = /```|^\s*[-*]\s|^\s*\d+\.\s|^\s*\|/m
  * structured answer, or anything past {@link MAX_BUBBLES}, falls back to the plain
  * size-based chunking.
  */
-function splitBubbles(text) {
+function splitBubbles(text, limit = MAX_REPLY_CHARS) {
   const trimmed = String(text || '').trim()
   if (!trimmed) return []
   if (STRUCTURED.test(trimmed)) return splitReply(trimmed)
@@ -551,7 +552,8 @@ export function createChannel(options) {
     // one message — splitting `/help` into ten bubbles is worse than a wall of
     // text.
     const bubble = options.bubbles === true
-    const parts = bubble ? splitBubbles(text) : splitReply(text)
+    const limit = readState().maxReplyChars || MAX_REPLY_CHARS
+    const parts = bubble ? splitBubbles(text, limit) : splitReply(text, limit)
     const list = parts.length > 0 ? parts : [String(text || '')]
 
     for (let index = 0; index < list.length; index += 1) {
@@ -896,7 +898,8 @@ export function createChannel(options) {
     const bindingCwd =
       readState().bindings[`${account.accountId}:${userId}`]?.cwd || workspaceDirectory
     const mediaNotes = []
-    for (const item of mediaItems.slice(0, MAX_MEDIA_PER_MESSAGE)) {
+    const mediaLimit = readState().mediaMaxPerMessage || MAX_MEDIA_PER_MESSAGE
+    for (const item of mediaItems.slice(0, mediaLimit)) {
       try {
         const saved = await saveInboundMedia(item, bindingCwd)
         if (saved) mediaNotes.push(saved)
@@ -1328,7 +1331,7 @@ export function createChannel(options) {
     if (command.name === 'list') {
       const items = await listSessions()
       if (items.length === 0) return reply('还没有会话。发任意消息会新建一个。')
-      const page = items.slice(0, MAX_LIST_ROWS)
+      const page = items.slice(0, readState().maxListRows || MAX_LIST_ROWS)
       // Freeze this screen's numbering so `/switch 3` means row 3 of what the
       // user is reading, not row 3 of whatever the list looks like later.
       lastList.set(key, page.map((item) => item.sessionId))
@@ -1448,14 +1451,15 @@ export function createChannel(options) {
     if (!boundConversationTarget()) return
 
     const delayMs = (state.doneNotifyDelaySec || 30) * 1000
+    const thresholdPx = state.presenceTravelPx || 120
     const generation = (doneNotices.get(sessionId) || 0) + 1
     doneNotices.set(sessionId, generation)
-    note('done', `watch ${shortId(sessionId)} | ${Math.round(delayMs / 1000)}s`)
+    note('done', `watch ${shortId(sessionId)} | ${Math.round(delayMs / 1000)}s | need ${thresholdPx}px`)
 
     void (async () => {
       // The sampler owns the clock: it resolves when the window closes, so there is
       // no timer to keep in step with it.
-      const report = await watchDesk(delayMs)
+      const report = await watchDesk(delayMs, thresholdPx)
       if (doneNotices.get(sessionId) !== generation) return
       doneNotices.delete(sessionId)
       await fireDoneNotice(sessionId, report)

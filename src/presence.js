@@ -78,7 +78,7 @@ function buildScript(windowMs) {
  * Resolves `null` when the probe cannot run at all (not Windows, no PowerShell,
  * policy block) — the caller decides what an unknown answer means.
  */
-export function watchDesk(windowMs) {
+export function watchDesk(windowMs, thresholdPx = DEFAULT_TRAVEL_PX) {
   if (process.platform !== 'win32') return Promise.resolve(null)
 
   return new Promise((resolve) => {
@@ -119,7 +119,7 @@ export function watchDesk(windowMs) {
       resolve({
         travelPx: travel,
         keyboardSamples: Number.isFinite(keys) ? keys : 0,
-        thresholdPx: DEFAULT_TRAVEL_PX,
+        thresholdPx,
       })
     })
   })

@@ -113,6 +113,31 @@ is diagnosable rather than mysterious.
 It must never vary per conversation: the Host matches an adopted session by
 `cwd`, and a mismatch makes that session permanently unreachable.
 
+## Settings
+
+Everything tunable lives in the panel, with the range enforced on both sides: the
+input clamps, and `/api/webot/settings` rejects an out-of-range value rather than
+storing it. Every field's `?` explains it; this table is the summary.
+
+| Setting | Default | Range | What it does |
+| --- | --- | --- | --- |
+| 权限请求在哪回答 | 手机 | phone / desktop | Who claims a permission prompt |
+| 等多久算放弃 | 30 s | 5–300 | Unanswered prompt is rejected after this |
+| 文件合并 | 20 s | 0–300 | An inbound file waits this long for its follow-up text; 0 = never wait |
+| 单次附件数 | 3 | 1–10 | Attachments handled per inbound message |
+| 提示词重发 | 20 turns | 1–200 | Turns between full-prompt resends (1 = every turn) |
+| 单条消息上限 | 1200 chars | 200–4000 | Longest single WeChat message before splitting |
+| /list 行数 | 10 | 3–30 | Rows `/list` prints |
+| 任务完成提醒 | off | on/off | Notify the phone when another session finishes |
+| 等待秒数 | 30 s | 5–600 | How long to watch the desk before deciding |
+| 鼠标阈值 | 120 px | 20–1000 | Pointer travel that counts as "somebody is here" |
+| 提示词 | shipped text | 0–8000 chars | The note appended to each turn |
+
+Deliberately **not** in the panel: the poll retry interval, the duplicate-id cache
+size, the session-listing cache and the bubble-splitter thresholds. Those are
+engineering constants — changing them from a UI would let a user make the channel
+silently slower or lossier without any way to tell.
+
 
 ## Seeing the session in DSH
 
