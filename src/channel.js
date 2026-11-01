@@ -77,6 +77,50 @@ function splitReply(text) {
   return parts
 }
 
+/** Commands handled by the channel itself; anything else reaches the agent. */
+const KNOWN_COMMANDS = new Set(['help', 'list', 'switch', 'new', 'current', 'cancel'])
+
+/** Rows one `/list` screen shows. */
+const MAX_LIST_ROWS = 10
+
+/** Last six characters of a session id — the part that fits on a phone. */
+function shortId(sessionId) {
+  return String(sessionId).slice(-6)
+}
+
+/** Best-effort title: `SessionSummary` has none, projections may. */
+function readTitle(item) {
+  const values = item && item.projections && item.projections.values
+  if (!values || typeof values !== 'object') return ''
+  for (const key of ['title', 'sessionTitle', 'name', 'label']) {
+    const value = values[key]
+    if (typeof value === 'string' && value.trim()) return value.trim()
+  }
+  return ''
+}
+
+/**
+ * Split `/name rest` into a command. Returns null for anything that is not one,
+ * so ordinary text that happens to start with a slash still reaches the agent.
+ */
+function parseCommand(text) {
+  const match = /^\/([A-Za-z]+)\s*([\s\S]*)$/.exec(String(text || '').trim())
+  if (!match) return null
+  return { name: match[1].toLowerCase(), argument: match[2].trim() }
+}
+
+const HELP_TEXT = [
+  '可用命令：',
+  '/list — 列出会话（带序号和短 id）',
+  '/switch 3 — 按序号切换；也可 /switch a1b2c3 按短 id',
+  '/new 标题 — 新建会话并切过去',
+  '/current — 当前会话',
+  '/cancel — 停止正在跑的任务',
+  '/help — 这份说明',
+  '',
+  '其它任何内容都会直接发给当前会话的 agent。',
+].join('\n')
+
 /** Read the session a stream payload belongs to, tolerating host shape changes. */
 function sessionIdOf(payload) {
   const direct = payload && payload.agent && payload.agent.session && payload.agent.session.id
@@ -108,6 +152,15 @@ export function createChannel(options) {
   const settleTimers = new Map()
   /** accountId -> last error text, for the panel. */
   const accountErrors = new Map()
+  /**
+   * conversationKey -> session ids of the last `/list` screen, in display order.
+   *
+   * `/switch 3` must mean "row 3 of the screen you are looking at". Sessions run
+   * while the list is on screen, so resolving against a freshly fetched list at
+   * switch time can pick a different session than the one numbered. Memory only:
+   * after a restart the user re-runs `/list`.
+   */
+  const lastList = new Map()
 
   /**
    * Ring buffer of what this channel actually did.
@@ -161,23 +214,9 @@ export function createChannel(options) {
     updateState({ syncBufs: { ...state.syncBufs, [accountId]: cursor } })
   }
 
-  /** Find or create the DSH session bound to one WeChat conversation. */
-  async function ensureSession(account, userId) {
+  /** Create a session in the channel workspace and bind this conversation to it. */
+  async function createBoundSession(account, userId) {
     const key = `${account.accountId}:${userId}`
-    const state = readState()
-    const existing = state.bindings[key]
-    if (existing) {
-      // The `cwd` is part of the session's identity on the Host: adopting an
-      // existing session with a different one throws and the session can never
-      // be reached again. Recreate the directory rather than move the session.
-      try {
-        fs.mkdirSync(existing.cwd || workspaceDirectory, { recursive: true })
-      } catch {
-        /* the agent will surface a missing directory itself */
-      }
-      return existing.sessionId
-    }
-
     fs.mkdirSync(workspaceDirectory, { recursive: true })
 
     // Prefer a real Workspace. A session created with only a `cwd` lands in the
@@ -208,6 +247,51 @@ export function createChannel(options) {
     return created.sessionId
   }
 
+  /** Find or create the DSH session bound to one WeChat conversation. */
+  async function ensureSession(account, userId) {
+    const key = `${account.accountId}:${userId}`
+    const state = readState()
+    const existing = state.bindings[key]
+    if (existing) {
+      // The `cwd` is part of the session's identity on the Host: adopting an
+      // existing session with a different one throws and the session can never
+      // be reached again. Recreate the directory rather than move the session.
+      try {
+        fs.mkdirSync(existing.cwd || workspaceDirectory, { recursive: true })
+      } catch {
+        /* the agent will surface a missing directory itself */
+      }
+      return existing.sessionId
+    }
+    return createBoundSession(account, userId)
+  }
+
+  /** Send one reply to a conversation, splitting it to WeChat-sized pieces. */
+  async function sendReply(accountId, toUserId, contextToken, text) {
+    const account = readState().accounts.find((entry) => entry.accountId === accountId)
+    if (!account) {
+      note('send', 'no account')
+      return
+    }
+    for (const part of splitReply(text)) {
+      try {
+        await sendText({
+          baseUrl: account.baseUrl,
+          token: account.token,
+          toUserId,
+          text: part,
+          contextToken,
+        })
+        note('send', `ok · ${part.length} chars`)
+        clearError(account.accountId)
+      } catch (error) {
+        note('send', `failed · ${String((error && error.message) || error)}`)
+        recordError(account.accountId, error)
+        return
+      }
+    }
+  }
+
   async function handleInbound(account, message, signal) {
     if (!message || typeof message !== 'object') return
     // BOT-typed entries are our own sends echoed back by the gateway.
@@ -222,6 +306,24 @@ export function createChannel(options) {
     const messageId = String(message.message_id || '')
     if (remember(messageId)) return
     note('inbound', `${userId} · ${text.length} chars`)
+
+    // A known command is answered by the channel itself and never reaches the
+    // agent. Unknown slash text falls through, so ordinary prose that starts
+    // with a slash still works.
+    const command = parseCommand(text)
+    if (command && KNOWN_COMMANDS.has(command.name)) {
+      note('command', `/${command.name} ${command.argument}`.trim())
+      await handleCommand(
+        account,
+        {
+          accountId: account.accountId,
+          toUserId: userId,
+          contextToken: String(message.context_token || ''),
+        },
+        command,
+      )
+      return
+    }
 
     const sessionId = await ensureSession(account, userId)
     replyTargets.set(sessionId, {
@@ -244,6 +346,100 @@ export function createChannel(options) {
     clearError(account.accountId)
   }
 
+  async function listSessions() {
+    const value = await sessionController.list({}, AbortSignal.timeout(8000))
+    return Array.isArray(value && value.items) ? [...value.items] : []
+  }
+
+  /** Handle one channel command. A command never reaches the agent. */
+  async function handleCommand(account, target, command) {
+    const key = `${account.accountId}:${target.toUserId}`
+    const binding = readState().bindings[key]
+    const reply = (text) => sendReply(account.accountId, target.toUserId, target.contextToken, text)
+
+    if (command.name === 'help') return reply(HELP_TEXT)
+
+    if (command.name === 'current') {
+      if (!binding) return reply('当前没有绑定会话。发任意消息会自动新建一个。')
+      return reply(`当前会话：${shortId(binding.sessionId)}\n目录：${binding.cwd || workspaceDirectory}`)
+    }
+
+    if (command.name === 'new') {
+      const sessionId = await createBoundSession(account, target.toUserId)
+      const title = command.argument.slice(0, 60)
+      if (title) {
+        try {
+          await sessionController.rename({ sessionId, title })
+        } catch {
+          /* the session exists either way; a failed rename must not fail the command */
+        }
+      }
+      return reply(`已新建会话 ${shortId(sessionId)}${title ? '：' + title : ''}`)
+    }
+
+    if (command.name === 'cancel') {
+      if (!binding) return reply('当前没有绑定会话。')
+      try {
+        sessionController.cancel({ sessionId: binding.sessionId })
+      } catch {
+        /* nothing running or the session is cold; both answer the same way */
+      }
+      return reply('已请求停止当前任务。')
+    }
+
+    if (command.name === 'list') {
+      const items = await listSessions()
+      if (items.length === 0) return reply('还没有会话。发任意消息会新建一个。')
+      const page = items.slice(0, MAX_LIST_ROWS)
+      // Freeze this screen's numbering so `/switch 3` means row 3 of what the
+      // user is reading, not row 3 of whatever the list looks like later.
+      lastList.set(key, page.map((item) => item.sessionId))
+      const lines = page.map((item, index) => {
+        const title = readTitle(item)
+        const current = binding && binding.sessionId === item.sessionId ? ' ← 当前' : ''
+        const running = item.running ? ' · 运行中' : ''
+        return `${index + 1}. ${title ? title + ' · ' : ''}${shortId(item.sessionId)}${running}${current}`
+      })
+      return reply(
+        `会话（${items.length} 个，显示前 ${page.length} 个）\n${lines.join('\n')}\n\n/switch 序号 或 /switch 短id`,
+      )
+    }
+
+    if (command.name === 'switch') {
+      const want = command.argument
+      if (!want) return reply('用法：/switch 3 或 /switch a1b2c3')
+      const items = await listSessions()
+      let sessionId = ''
+      if (/^\d+$/.test(want)) {
+        const numbered = lastList.get(key) || []
+        sessionId = numbered[Number(want) - 1] || ''
+        if (!sessionId) return reply('这个序号没有对应的会话。先发 /list 再选。')
+      } else {
+        const matches = items.filter((item) => String(item.sessionId).includes(want))
+        if (matches.length === 0) return reply('找不到这个会话。发 /list 看看。')
+        if (matches.length > 1) return reply('短 id 有歧义，请多给几位。')
+        sessionId = matches[0].sessionId
+      }
+      const found = items.find((item) => item.sessionId === sessionId)
+      updateState({
+        bindings: {
+          ...readState().bindings,
+          [key]: {
+            sessionId,
+            // Store the cwd the Host reports: a mismatch makes the adopted
+            // session permanently unreachable.
+            cwd: (found && found.cwd) || workspaceDirectory,
+            createdAt: Date.now(),
+          },
+        },
+      })
+      const title = found ? readTitle(found) : ''
+      return reply(`已切换到 ${shortId(sessionId)}${title ? '：' + title : ''}`)
+    }
+
+    return reply(HELP_TEXT)
+  }
+
   async function flush(sessionId) {
     settleTimers.delete(sessionId)
     const text = (pendingText.get(sessionId) || '').trim()
@@ -258,31 +454,9 @@ export function createChannel(options) {
       note('flush', `${sessionId} · no target`)
       return
     }
-    const account = readState().accounts.find((entry) => entry.accountId === target.accountId)
-    if (!account) {
-      note('flush', `${sessionId} · account gone`)
-      return
-    }
 
-    const parts = splitReply(text)
-    note('flush', `${sessionId} · ${text.length} chars in ${parts.length} part(s)`)
-    for (const part of parts) {
-      try {
-        await sendText({
-          baseUrl: account.baseUrl,
-          token: account.token,
-          toUserId: target.toUserId,
-          text: part,
-          contextToken: target.contextToken,
-        })
-        note('send', `ok · ${part.length} chars`)
-        clearError(account.accountId)
-      } catch (error) {
-        note('send', `failed · ${String((error && error.message) || error)}`)
-        recordError(account.accountId, error)
-        return
-      }
-    }
+    note('flush', `${sessionId} · ${text.length} chars`)
+    await sendReply(target.accountId, target.toUserId, target.contextToken, text)
   }
 
   function scheduleFlush(sessionId) {

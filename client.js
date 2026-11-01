@@ -565,6 +565,7 @@ window.__ModuleLoader__.load({
               ? h('p', { style: { ...MUTED, color: 'var(--dsw-alias-state-error-primary)' } }, bindError)
               : null,
           ),
+          h('p', { style: MUTED }, t('bind.commands')),
           h('div', { style: { marginTop: '12px', display: 'flex', gap: '8px' } },
             h(Btn, {
               label: t('login.rebind'),
@@ -865,6 +866,7 @@ window.__ModuleLoader__.load({
       'bind.failed': '绑定失败',
       'bind.untitled': '未命名会话',
       'bind.running': '运行中',
+      'bind.commands': '在微信里发 /help 可以用 /list、/switch、/new、/current、/cancel 管理会话。',
       'login.phase.idle': '准备中',
       'login.phase.starting': '正在获取二维码',
       'login.phase.waiting': '等待扫码',
@@ -889,7 +891,7 @@ window.__ModuleLoader__.load({
       'login.retry': '重试',
       'next.heading': '这一步做到了什么',
       'next.body':
-        'M4 加了会话绑定：新会话会建在名为 dsh_webot 的工作区里，所以能在 DSH 侧栏看到；也可以直接绑到任意一个已有会话上，两边接着聊。下一步是 /new /list /switch 这些在微信里切会话的命令。',
+        'M5 让你在微信里管理会话：/list 列会话（带序号和短 id）、/switch 3 或 /switch 短id 切换、/new 标题 新建、/current 当前、/cancel 停止、/help 全部命令。这些命令由通道直接回答，不会发进 agent。下一步是把权限弹窗推到手机上。',
       'footer.hint': '按 Esc 关闭',
     }
 
@@ -933,6 +935,8 @@ window.__ModuleLoader__.load({
       'bind.failed': 'Could not bind',
       'bind.untitled': 'Untitled session',
       'bind.running': 'running',
+      'bind.commands':
+        'Send /help in WeChat to manage sessions with /list, /switch, /new, /current and /cancel.',
       'login.phase.idle': 'Preparing',
       'login.phase.starting': 'Fetching the QR code',
       'login.phase.waiting': 'Waiting for a scan',
@@ -957,7 +961,7 @@ window.__ModuleLoader__.load({
       'login.retry': 'Retry',
       'next.heading': 'What this milestone proves',
       'next.body':
-        'M4 adds session binding: new sessions are created inside a workspace named dsh_webot, so they appear in the DSH sidebar, and you can bind the conversation to any existing session instead and continue it from both sides. Session commands from WeChat (/new, /list, /switch) come next.',
+        'M5 lets you manage sessions from WeChat: /list lists them with numbers and short ids, /switch 3 or /switch <short id> moves, /new <title> starts one, /current reports the bound one, /cancel stops the running turn. The channel answers these itself, so they never reach the agent. Next: permission prompts delivered to the phone.',
       'footer.hint': 'Press Esc to close',
     }
 

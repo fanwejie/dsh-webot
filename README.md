@@ -62,6 +62,31 @@ M4 fixes it in two ways:
   conversation to any of them — including one you already had — or detaches it,
   so the next message starts a fresh session inside the workspace.
 
+## Commands from WeChat
+
+Handled by the channel itself; they never reach the agent. Anything else is a
+normal prompt.
+
+| Command | What it does |
+| --- | --- |
+| `/list` | This Machine's sessions, numbered, each with its short id |
+| `/switch 3` | Move to row 3 of the screen **you are reading** |
+| `/switch a1b2c3` | Move by short id — independent of numbering, never stale |
+| `/new 修复登录` | Create a session (titled if given) and move to it |
+| `/current` | Which session this conversation is on |
+| `/cancel` | Stop the running turn |
+| `/help` | The list above |
+
+`/switch 3` resolves against the ids captured when that `/list` was sent, not
+against a fresh fetch: sessions run while the list sits on a phone, so row 3 may
+point at a different session by the time the reply arrives. Numbers therefore go
+stale across *different* listings, which is exactly why every row also carries a
+short id.
+
+The command name runs up to the first non-letter, so `/switch3` is accepted as
+`/switch 3`; `/switch:3` is not, because the colon lands in the argument and is
+then treated as a short id.
+
 ## Layout
 
 | File | Role |
