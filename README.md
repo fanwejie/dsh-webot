@@ -2,7 +2,7 @@
 
 WeChat channel for DeepSeek Harness — bind WeChat, then drive the agent on this machine from your phone.
 
-**Status: M3 (text both ways).** What works today:
+**Status: working.** What it does today:
 
 - a 「weBot设置」 action in the settings header, right of the shipped
   「打开配置文件」 (`open-document`, order 0) and left of Close;
@@ -11,11 +11,21 @@ WeChat channel for DeepSeek Harness — bind WeChat, then drive the agent on thi
   code, IDC redirect, automatic refresh on expiry, and the resulting binding
   persisted to disk;
 - the long poll that receives WeChat messages, one DSH session per WeChat
-  conversation, and the agent's answer sent back to the phone;
+  conversation;
+- **replies the agent composes and sends itself** through `send_to_wechat`
+  (text and media) — nothing is forwarded automatically;
+- inbound images, files, videos and voice are downloaded, decrypted and placed in
+  the session's workspace, after a merge window that waits for the sentence that
+  explains them;
+- a message arriving mid-task **interrupts** the running turn instead of queueing
+  behind it;
+- `/help`, `/list`, `/switch`, `/new`, `/current`, `/cancel` answered by the channel
+  itself;
+- **permission prompts and questions on the phone** — tool plus reason, answer
+  1 allow once / 2 reject / 3 cancel — claimed only for this channel's own
+  sessions; a session you are driving at the desk keeps its desktop prompt;
 - `GET /api/webot/status` reporting the bound account and its live state (never
   its token), plus a ring buffer of what the channel recently did.
-
-Not built yet: session commands (M4), approvals from the phone (M5), media (M6).
 
 ## How one message travels
 

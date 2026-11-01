@@ -1119,20 +1119,6 @@ window.__ModuleLoader__.load({
             { style: BODY },
             h('h3', { style: { ...SECTION_TITLE, marginBottom: '10px' } }, t('status.heading')),
             h(ChannelBody, { t }),
-            h(
-              'section',
-              {
-                style: {
-                  marginTop: '20px',
-                  padding: '12px 14px',
-                  borderRadius: 'var(--dsw-radius-md)',
-                  background: 'var(--dsw-alias-bg-layer-1)',
-                  borderLeft: '3px solid var(--dsw-alias-brand-primary)',
-                },
-              },
-              h('h3', { style: SECTION_TITLE }, t('next.heading')),
-              h('p', { style: MUTED }, t('next.body')),
-            ),
           ),
           h('div', { style: FOOTER }, h('span', null, t('footer.hint')), h('span', null, t('panel.subtitle'))),
         ),
@@ -1233,9 +1219,6 @@ window.__ModuleLoader__.load({
       'login.rebind': '重新绑定',
       'login.cancel': '取消重绑',
       'login.retry': '重试',
-      'next.heading': '这一步做到了什么',
-      'next.body':
-        'M6 把权限请求推到了手机上：agent 要执行敏感操作时会先把「工具 + 原因」发到微信，回 1 允许一次 / 2 拒绝 / 3 取消。只接管这个通道自己的会话，桌面上你正在用的会话仍然在桌面弹窗。',
       'footer.hint': '按 Esc 关闭',
     }
 
@@ -1323,9 +1306,6 @@ window.__ModuleLoader__.load({
       'login.rebind': 'Bind another account',
       'login.cancel': 'Cancel rebinding',
       'login.retry': 'Retry',
-      'next.heading': 'What this milestone proves',
-      'next.body':
-        'M6 delivers permission prompts to the phone: when the agent wants to run something sensitive it sends the tool and the reason to WeChat, and you answer 1 allow once / 2 reject / 3 cancel. It only claims prompts for sessions this channel owns — a session you are driving at the desk keeps its desktop prompt.',
       'footer.hint': 'Press Esc to close',
     }
 
