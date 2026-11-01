@@ -31,7 +31,7 @@ import { readState, stateDirectory, stateFilePath, updateState } from './src/sta
  */
 export const inject = ['connection', 'sessionController']
 
-const VERSION = '0.8.1'
+const VERSION = '0.9.0'
 
 /**
  * Fixed `cwd` for every session this channel creates.
@@ -126,6 +126,7 @@ function readStatus() {
       workspace: WORKSPACE_DIRECTORY,
       sessions: live.activeSessions,
       pendingApprovals: live.pendingApprovals || 0,
+      pendingQuestions: live.pendingQuestions || 0,
       events: live.events || [],
     },
     checkedAt: new Date().toISOString(),
@@ -239,6 +240,22 @@ export function apply(ctx) {
       liveChannel.log('boot', 'approval listener: local only - options rejected')
     } catch (error) {
       liveChannel.log('boot', `approval listener failed: ${String((error && error.message) || error)}`)
+    }
+  }
+
+  // Structured questions are the same shape of waterfall as permissions, and get
+  // the same treatment: prepend so the desk cannot claim a prompt the phone is
+  // supposed to answer.
+  const onQuestion = (request, next) => liveChannel.handleQuestion(request, next)
+  try {
+    ctx.on('user-questions/request', onQuestion, { global: true, prepend: true })
+    liveChannel.log('boot', 'question listener: global+prepend')
+  } catch {
+    try {
+      ctx.on('user-questions/request', onQuestion)
+      liveChannel.log('boot', 'question listener: local only - options rejected')
+    } catch (error) {
+      liveChannel.log('boot', `question listener failed: ${String((error && error.message) || error)}`)
     }
   }
 

@@ -237,6 +237,13 @@ export function createChannel(options) {
    * "1" unambiguous.
    */
   const pendingApprovals = new Map()
+  /**
+   * conversationKey -> the one pending structured question.
+   *
+   * Same one-at-a-time rule as approvals, for the same reason: a bare "2" has to
+   * mean one thing.
+   */
+  const pendingQuestions = new Map()
 
   /**
    * Ring buffer of what this channel actually did.
@@ -501,6 +508,24 @@ export function createChannel(options) {
       return
     }
 
+    // A reply to a structured question is consumed the same way: the tool call is
+    // blocked on it, so the text must not be queued behind it.
+    const pendingQuestion = pendingQuestions.get(`${account.accountId}:${userId}`)
+    if (pendingQuestion) {
+      const answer = buildQuestionAnswer(pendingQuestion.item, text)
+      const first = answer.answers[0]
+      const chosen = Array.isArray(first.selected) ? first.selected.length : 0
+      note('question-reply', `${chosen} selected${first.custom ? ' + custom' : ''}`)
+      pendingQuestion.finish(answer)
+      await sendReply(
+        account.accountId,
+        userId,
+        String(message.context_token || ''),
+        '已记录你的回答',
+      )
+      return
+    }
+
     // A known command is answered by the channel itself and never reaches the
     // agent. Unknown slash text falls through, so ordinary prose that starts
     // with a slash still works.
@@ -578,21 +603,29 @@ export function createChannel(options) {
     return undefined
   }
 
-  /** Resolve when the phone answers, or when the request is cancelled. */
-  function beginApprovalWait(key, signal) {
+  /**
+   * Resolve when the phone answers a prompt, or when the request goes away.
+   *
+   * Generic over the pending registry so permission prompts and structured
+   * questions share one implementation instead of drifting apart. `abortValue` is
+   * what the caller wants back when the request is cancelled, because the two
+   * answer types have nothing in common.
+   */
+  function beginWait(registry, key, signal, abortValue, extra) {
     const entry = {}
+    if (extra) Object.assign(entry, extra)
     const promise = new Promise((resolve) => {
       entry.resolve = resolve
     })
-    const onAbort = () => entry.finish('cancelled')
-    entry.finish = (outcome) => {
-      if (pendingApprovals.get(key) === entry) pendingApprovals.delete(key)
+    const onAbort = () => entry.finish(abortValue)
+    entry.finish = (value) => {
+      if (registry.get(key) === entry) registry.delete(key)
       if (signal) signal.removeEventListener('abort', onAbort)
-      entry.resolve(outcome)
+      entry.resolve(value)
     }
-    pendingApprovals.set(key, entry)
+    registry.set(key, entry)
     if (signal) {
-      if (signal.aborted) entry.finish('cancelled')
+      if (signal.aborted) entry.finish(abortValue)
       else signal.addEventListener('abort', onAbort, { once: true })
     }
     return { promise, finish: entry.finish }
@@ -655,7 +688,7 @@ export function createChannel(options) {
     if (reason) lines.push(`原因：${String(reason).slice(0, 300)}`)
     lines.push('', '回复 1 允许一次 · 2 拒绝 · 3 取消')
 
-    const wait = beginApprovalWait(key, request.signal)
+    const wait = beginWait(pendingApprovals, key, request.signal, 'cancelled')
     await sendReply(target.accountId, target.toUserId, target.contextToken, lines.join('\n'))
 
     // Claimed outright, so the desktop answerer is never started. Racing it and
@@ -686,6 +719,117 @@ export function createChannel(options) {
       )
     }
     return outcome
+  }
+
+  /** An empty answer that still names the question, for the cancelled case. */
+  function emptyQuestionAnswer(item) {
+    return { answers: [{ id: String((item && item.id) || ''), selected: [] }] }
+  }
+
+  /** Parse `1,3` / `1 3` / `1、3` into zero-based indexes; null when not a selection. */
+  function parseSelection(text, count) {
+    const parts = String(text || '')
+      .split(/[\s,，、]+/)
+      .filter(Boolean)
+    if (parts.length === 0) return null
+    const indexes = []
+    for (const part of parts) {
+      if (!/^\d+$/.test(part)) return null
+      const value = Number(part)
+      if (!Number.isFinite(value) || value < 1 || value > count) return null
+      indexes.push(value - 1)
+    }
+    return [...new Set(indexes)]
+  }
+
+  /** Turn one phone reply into the answer shape the tool expects. */
+  function buildQuestionAnswer(item, text) {
+    const options = Array.isArray(item && item.options) ? item.options : []
+    const trimmed = String(text || '').trim()
+    const selection = options.length ? parseSelection(trimmed, options.length) : null
+    if (selection) {
+      const chosen = item.multiSelect ? selection : selection.slice(0, 1)
+      return {
+        answers: [
+          { id: String(item.id), selected: chosen.map((index) => String(options[index].label)) },
+        ],
+      }
+    }
+    // Anything that is not a valid selection is a typed answer, which the tool
+    // accepts through `custom`.
+    return { answers: [{ id: String(item.id), selected: [], custom: trimmed }] }
+  }
+
+  /** Claim one structured question for the phone, or delegate. */
+  async function handleQuestion(request, next) {
+    try {
+      return await claimQuestion(request, next)
+    } catch (error) {
+      note('question', `error | ${String((error && error.message) || error)}`)
+      return next()
+    }
+  }
+
+  async function claimQuestion(request, next) {
+    const items = request && Array.isArray(request.questions) ? request.questions : []
+    const sessionId = request && request.agent && request.agent.id ? String(request.agent.id) : ''
+    note('question', `seen ${items.length} | ${sessionId ? sessionId.slice(-8) : 'no-session'}`)
+
+    // Questions ride the same switch as permissions: one place decides whether
+    // interactive prompts belong to the phone or the desk.
+    if (readState().approvalMode === 'desktop') {
+      note('question', 'delegated | mode=desktop')
+      return next()
+    }
+    if (!sessionId) return next()
+
+    const target = targetForSession(sessionId)
+    if (!target) {
+      note('question', `delegated | no target for ${sessionId.slice(-8)}`)
+      return next()
+    }
+
+    const key = `${target.accountId}:${target.toUserId}`
+    if (pendingQuestions.has(key)) {
+      note('question', 'delegated | another question is already open')
+      return next()
+    }
+
+    // Only single-question requests are handled here. Answering several at once
+    // from a phone needs numbering that spans questions, and getting it wrong
+    // produces a confidently wrong answer — delegating is the honest option.
+    if (items.length !== 1) {
+      note('question', `delegated | ${items.length} questions, phone handles one`)
+      return next()
+    }
+
+    const item = items[0]
+    const options = Array.isArray(item.options) ? item.options : []
+    const lines = [`agent 想问你（会话 ${shortId(sessionId)}）`]
+    if (item.header) lines.push(`【${item.header}】`)
+    lines.push(String(item.question || ''))
+    if (item.detail) lines.push(String(item.detail).slice(0, 300))
+    options.forEach((option, index) => {
+      const description = option.description ? ` — ${String(option.description).slice(0, 120)}` : ''
+      lines.push(`${index + 1}. ${String(option.label)}${description}`)
+    })
+    lines.push('')
+    lines.push(
+      options.length
+        ? item.multiSelect
+          ? '回复序号，可多选（如 1,3），也可以直接输入你的答案'
+          : '回复序号，也可以直接输入你的答案'
+        : '直接回复你的答案',
+    )
+
+    const wait = beginWait(pendingQuestions, key, request.signal, emptyQuestionAnswer(item), { item })
+    await sendReply(target.accountId, target.toUserId, target.contextToken, lines.join('\n'))
+
+    const answer = await wait.promise
+    const first = answer.answers && answer.answers[0]
+    const chosen = first && Array.isArray(first.selected) ? first.selected.length : 0
+    note('question', `answered | ${chosen} selected${first && first.custom ? ' + custom' : ''}`)
+    return answer
   }
 
   async function listSessions() {
@@ -926,6 +1070,8 @@ export function createChannel(options) {
     // blocked for the rest of the process's life.
     for (const entry of [...pendingApprovals.values()]) entry.finish('cancelled')
     pendingApprovals.clear()
+    for (const entry of [...pendingQuestions.values()]) entry.finish({ answers: [] })
+    pendingQuestions.clear()
   }
 
   function snapshot() {
@@ -939,6 +1085,7 @@ export function createChannel(options) {
       errors: [...accountErrors.values()],
       activeSessions: replyTargets.size,
       pendingApprovals: pendingApprovals.size,
+      pendingQuestions: pendingQuestions.size,
       events: events.slice(-24),
     }
   }
@@ -946,6 +1093,7 @@ export function createChannel(options) {
   return {
     handleAssistantStream,
     handleApproval,
+    handleQuestion,
     sendFileToConversation,
     startAccount,
     startAll,

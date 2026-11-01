@@ -139,10 +139,43 @@ stacking, which is what keeps a bare `1` unambiguous.
 | `phone` | Only WeChat; the desk never sees the request |
 | `desktop` | Only the desk; the channel delegates and sends nothing |
 
-Both exclusive modes were shipped for one round each, and each one made the other
-side look broken — from that side the prompt genuinely is missing, because a
-waterfall has exactly one winner. `both` is the only mode where neither side can
-report a prompt as lost.
+There is deliberately **no "both"**, and this was learned the expensive way: it
+shipped, and it left a permission dialog stuck on the desktop after the turn had
+already finished. Calling `next()` opens a dialog in the browser that closes only
+when *that* answerer resolves; letting the phone win instead abandons it, and the
+host exposes no withdraw call. A request has exactly one owner, so the choice is
+made up front instead of raced.
+
+## Structured questions
+
+`ask_user_question` — the agent asking you to pick from options — is a waterfall
+like approvals, gets the same `prepend`, and follows the same `approvalMode`
+switch (a deployment that keeps prompts at the desk keeps questions there too).
+
+On the phone it renders as a numbered list:
+
+```
+agent 想问你（会话 b64751）
+【部署方式】
+要部署到哪台机器上？
+1. 本机 — 直接在这台电脑上跑
+2. 服务器 — 推到我那台常开的机器
+回复序号，也可以直接输入你的答案
+```
+
+A reply of `1` selects that option; `1,3` selects both when the question is
+multi-select; anything that is not a valid selection is taken as a typed answer
+and arrives as `custom`. Options are matched by **label**, which is what the
+answer type carries.
+
+**One question per request.** A request with several questions delegates to the
+desk instead of guessing: answering them from a phone needs numbering that spans
+questions, and a wrong guess would come back as a confidently wrong answer rather
+than a failure.
+
+There is no timeout here, unlike approvals. A question has no safe default — the
+tool call's own `signal` decides when to give up, and an aborted wait answers with
+empty selections.
 
 ## Media
 
