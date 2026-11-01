@@ -207,6 +207,23 @@ window.__ModuleLoader__.load({
       border: '0.5px solid var(--dsw-alias-border-l1)',
     }
 
+    /**
+     * The commands the channel answers itself, for the usage list.
+     *
+     * Kept here rather than in the locale so the columns stay aligned across
+     * languages: the command text is the same string in both, and only the
+     * description is translated.
+     */
+    const USAGE_COMMANDS = [
+      ['/list', 'usage.list'],
+      ['/switch 3', 'usage.switchNum'],
+      ['/switch a1b2c3', 'usage.switchId'],
+      ['/new', 'usage.new'],
+      ['/current', 'usage.current'],
+      ['/cancel', 'usage.cancel'],
+      ['/help', 'usage.help'],
+    ]
+
     const TEXT_INPUT = {
       boxSizing: 'border-box',
       height: '28px',
@@ -907,7 +924,47 @@ window.__ModuleLoader__.load({
               h('span', { style: { ...MUTED, margin: 0 } }, t('persona.hint')),
             ),
           ),
-          h('p', { style: MUTED }, t('bind.commands')),
+          h(
+            'section',
+            { style: { ...PANEL_CARD, marginTop: '16px' } },
+            h('h3', { style: SECTION_TITLE }, t('bind.usageHeading')),
+            h('p', { style: { ...MUTED, marginTop: '6px' } }, t('bind.commands')),
+            // A two-column list beats one sentence with six commands in it: the
+            // command is what you scan for, so it gets its own monospaced column.
+            h(
+              'div',
+              {
+                style: {
+                  display: 'grid',
+                  gridTemplateColumns: 'max-content 1fr',
+                  columnGap: '14px',
+                  rowGap: '5px',
+                  marginTop: '8px',
+                  fontSize: '12px',
+                  lineHeight: '18px',
+                },
+              },
+              USAGE_COMMANDS.map(([command, key]) => [
+                h(
+                  'code',
+                  {
+                    key: `c-${command}`,
+                    style: {
+                      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                      color: 'var(--dsw-alias-label-primary)',
+                      whiteSpace: 'nowrap',
+                    },
+                  },
+                  command,
+                ),
+                h(
+                  'span',
+                  { key: `d-${command}`, style: { color: 'var(--dsw-alias-label-secondary)' } },
+                  t(key),
+                ),
+              ]),
+            ),
+          ),
         )
       }
 
@@ -1184,12 +1241,19 @@ window.__ModuleLoader__.load({
       'bind.failed': '绑定失败',
       'bind.untitled': '未命名会话',
       'bind.running': '运行中',
-      'bind.commands': '在微信里发 /help 可以用 /list、/switch、/new、/current、/cancel 管理会话。',
+      'bind.commands': '在微信里直接发这些，不会经过 agent：',
+      'bind.usageHeading': '怎么用',
+      'usage.list': '列出这台机器上的会话（带编号和短 id）',
+      'usage.switchNum': '切到第 3 个 — 按你屏幕上看到的编号',
+      'usage.switchId': '按短 id 切换 — 编号变了也不会切错',
+      'usage.new': '开一个新会话',
+      'usage.current': '看现在用的是哪个会话',
+      'usage.cancel': '停掉正在跑的这一轮',
+      'usage.help': '在微信里显示这份说明',
       'approval.mode': '权限弹窗',
       'approval.phone': '只在手机（通道接管）',
       'approval.desktop': '只在桌面（通道不介入）',
-      'approval.hint':
-        '两者不能同时生效：请求只有一个归属，如果两边都开，输的那一边会在界面上留下一个关不掉的弹窗——宿主没有撤回接口。',
+      'approval.hint': '只能二选一：请求只会被一边接住。两边同时接会留下一个关不掉的弹窗（宿主没有撤回接口），所以这里不让两个都开。',
       'approval.timeout': '超时',
       'approval.timeoutUnit': '秒（5–300）内没回复就自动拒绝',
       'merge.label': '文件合并',
@@ -1268,13 +1332,20 @@ window.__ModuleLoader__.load({
       'bind.failed': 'Could not bind',
       'bind.untitled': 'Untitled session',
       'bind.running': 'running',
-      'bind.commands':
-        'Send /help in WeChat to manage sessions with /list, /switch, /new, /current and /cancel.',
+      'bind.commands': 'Send these in WeChat — they never reach the agent:',
+      'bind.usageHeading': 'How to use it',
+      'usage.list': 'List this machine’s sessions, with numbers and short ids',
+      'usage.switchNum': 'Switch to number 3 — counted as shown on your screen',
+      'usage.switchId': 'Switch by short id — unaffected by renumbering',
+      'usage.new': 'Start a new session',
+      'usage.current': 'Show which session you are in',
+      'usage.cancel': 'Stop the turn that is running',
+      'usage.help': 'Show this list in WeChat',
       'approval.mode': 'Permission prompts',
       'approval.phone': 'Phone only (channel claims)',
       'approval.desktop': 'Desktop only (channel stays out)',
       'approval.hint':
-        'These cannot both be on. A request has exactly one owner, and if both sides are started the loser leaves a dialog on screen that nothing can close — the host has no withdraw call.',
+        'Pick one. A request has exactly one owner — if both sides take it, the other leaves a dialog on screen that nothing can close, because the host has no withdraw call.',
       'approval.timeout': 'Timeout',
       'approval.timeoutUnit': 'seconds (5–300) before an automatic reject',
       'merge.label': 'File merge',
