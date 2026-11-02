@@ -257,6 +257,13 @@ const MEDIA_ITEM_LABELS = new Map([
   [5, '视频'],
 ])
 
+/** The same labels for the outbound sender, which reports a kind rather than a type. */
+const MEDIA_KIND_LABELS = new Map([
+  ['image', '图片'],
+  ['video', '视频'],
+  ['file', '文件'],
+])
+
 /** How many media items one message may carry in. */
 const MAX_MEDIA_PER_MESSAGE = 3
 
@@ -1123,6 +1130,17 @@ export function createChannel(options) {
       'send-media',
       `sent ${result.kind} | ${result.fileName} | ${result.bytes} bytes${direct ? '' : ' | cross-session'}`,
     )
+    // Remember the file under the id the gateway gave it, so quoting it later hands the
+    // agent the path instead of a bare "[文件]". The path is the one on disk here, which
+    // is what makes the file openable at all.
+    if (result.messageId) {
+      const label = MEDIA_KIND_LABELS.get(result.kind) || '文件'
+      rememberQuote(
+        result.messageId,
+        `[微信${label}] ${result.filePath}（${result.bytes} 字节）`,
+        { label, path: result.filePath, bytes: result.bytes },
+      )
+    }
     return { sent: true, kind: result.kind, fileName: result.fileName, bytes: result.bytes }
   }
 

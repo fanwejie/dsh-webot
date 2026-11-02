@@ -175,7 +175,15 @@ export async function sendMediaToWeChat({
       signal,
     })
   }
-  await sendItem({ baseUrl, token, toUserId, item, contextToken, signal })
+  // The response carries the id of the message just sent, which is what a later quote
+  // of it will name. Returned so the caller can cache the file under that id.
+  const ack = await sendItem({ baseUrl, token, toUserId, item, contextToken, signal })
 
-  return { kind, fileName: path.basename(filePath), bytes: rawsize }
+  return {
+    kind,
+    fileName: path.basename(filePath),
+    bytes: rawsize,
+    filePath,
+    messageId: (ack && (ack.message_id || ack.msg_id || ack.msgid)) || '',
+  }
 }
