@@ -644,14 +644,51 @@ export function createChannel(options) {
   /** Whether the one-shot "did the gateway return an id?" note has been written. */
   let outboundAckLogged = false
 
+  /** Pending timer for the coalesced cache write, and whether one is owed. */
+  let quoteFlushTimer = null
+  let quoteDirty = false
+
+  // Hydrate from disk: the quotes people send are almost always of older messages, so
+  // a cache that only lives in memory is empty exactly when it is needed.
+  for (const entry of readState().quoteCache || []) {
+    if (Array.isArray(entry) && entry.length === 2) quoteCache.set(String(entry[0]), String(entry[1]))
+  }
+
+  /** Coalesced write of the cache; per-message writes would rewrite the file constantly. */
+  function scheduleQuoteFlush() {
+    if (quoteFlushTimer) return
+    quoteFlushTimer = setTimeout(() => {
+      quoteFlushTimer = null
+      flushQuoteCache()
+    }, 2000)
+    if (typeof quoteFlushTimer.unref === 'function') quoteFlushTimer.unref()
+  }
+
+  function flushQuoteCache() {
+    if (quoteFlushTimer) {
+      clearTimeout(quoteFlushTimer)
+      quoteFlushTimer = null
+    }
+    if (!quoteDirty) return
+    quoteDirty = false
+    try {
+      updateState({ quoteCache: [...quoteCache.entries()] })
+    } catch {
+      /* the cache is an optimisation; a failed write must not break delivery */
+    }
+  }
+
   function rememberQuote(id, body) {
     const key = String(id || '').trim()
     if (!key || !body) return
+    if (quoteCache.get(key) === body) return
     quoteCache.set(key, body)
     if (quoteCache.size > QUOTE_CACHE_LIMIT) {
       const oldest = quoteCache.keys().next().value
       quoteCache.delete(oldest)
     }
+    quoteDirty = true
+    scheduleQuoteFlush()
   }
 
   /** Remember an outbound message under whatever id the gateway returned for it. */
@@ -981,15 +1018,22 @@ export function createChannel(options) {
     const promptText = quoted ? (text ? `${quoted}\n\n${text}` : quoted) : text
 
     const quoteId = quoteRefId(message)
-    if (quoteId && !quoteCache.has(quoteId)) {
-      // Logged so a quote that still cannot be resolved leaves a trail. The reference
-      // id and the ids already cached are printed truncated, which is enough to tell
-      // whether the two are the same kind of id at all.
-      const last = [...quoteCache.keys()]
-        .slice(-3)
-        .map((key) => key.slice(-12))
-        .join(',')
-      note('quote', `miss | ref=${quoteId.slice(-12)} | cached=${quoteCache.size} | last=${last || '-'}`)
+    if (quoteId) {
+      if (quoteCache.has(quoteId)) {
+        note('quote', `hit | ${quoteId.slice(-12)} | cached=${quoteCache.size}`)
+      } else {
+        // Logged so a quote that still cannot be resolved leaves a trail. The reference
+        // id and the ids already cached are printed truncated, which is enough to tell
+        // whether the two are the same kind of id at all.
+        const last = [...quoteCache.keys()]
+          .slice(-3)
+          .map((key) => key.slice(-12))
+          .join(',')
+        note(
+          'quote',
+          `miss | ref=${quoteId.slice(-12)} | cached=${quoteCache.size} | last=${last || '-'}`,
+        )
+      }
     }
 
     if (remember(messageId)) return
@@ -1874,6 +1918,8 @@ export function createChannel(options) {
   }
 
   function stopAll() {
+    // The quote cache is written on a timer; unloading must not drop the last batch.
+    flushQuoteCache()
     for (const accountId of [...loops.keys()]) stopAccount(accountId)
     for (const timer of settleTimers.values()) clearTimeout(timer)
     settleTimers.clear()

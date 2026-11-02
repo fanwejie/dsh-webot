@@ -234,6 +234,22 @@ export function normalizeState(raw) {
     }
   }
 
+  // Recent message bodies, so a quote that arrives as an id alone can be resolved.
+  //
+  // Stored as [id, body] pairs in arrival order. This has to survive a restart: the
+  // quotes people send are almost always of older messages, and an in-memory-only
+  // cache is empty exactly when it is needed.
+  const quoteCache = []
+  if (Array.isArray(source.quoteCache)) {
+    for (const entry of source.quoteCache) {
+      if (!Array.isArray(entry) || entry.length !== 2) continue
+      const id = typeof entry[0] === 'number' ? String(entry[0]) : text(entry[0], 128)
+      const body = text(entry[1], 4096)
+      if (!id || !body) continue
+      quoteCache.push([id, body])
+    }
+  }
+
   const scenarios = normalizeScenarios(source)
 
   return {
@@ -242,6 +258,7 @@ export function normalizeState(raw) {
     syncBufs,
     bindings,
     contextTokens,
+    quoteCache,
     // Where a permission prompt is offered. `phone` claims the request and the
     // desk never sees it; `desktop` delegates and the channel stays out. Anything
     // else — a first run, or a stored 'both' from the withdrawn race mode — is
