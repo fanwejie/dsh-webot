@@ -33,6 +33,12 @@ const MAX_ACCOUNTS = 5
 /** Upper bound on stored message bodies; retention, not this, is the real limit. */
 const MAX_QUOTE_ENTRIES = 1000
 
+/** How many failed inbound messages may wait for a replay. */
+const MAX_PENDING_INBOUND = 20
+
+/** How large one queued message may be, serialized, before it is dropped. */
+const MAX_PENDING_MESSAGE_BYTES = 32 * 1024
+
 /** Merge window bounds: zero disables waiting, and the cap keeps it a window. */
 const DEFAULT_MEDIA_MERGE_SEC = 20
 const MAX_MEDIA_MERGE_SEC = 300
@@ -274,6 +280,41 @@ export function normalizeState(raw) {
     }
   }
 
+  // Messages that failed to process after a retry, kept so they can be tried again on
+  // the next start.
+  //
+  // The poll cursor is persisted before the batch is handled, so a message that throws
+  // is never fetched again; without this list it is simply gone. Replay is best effort
+  // and at-least-once: a message that failed midway through delivery may be delivered
+  // twice, which is the trade taken deliberately over silently dropping it.
+  const pendingInbound = []
+  if (Array.isArray(source.pendingInbound)) {
+    for (const entry of source.pendingInbound) {
+      if (!entry || typeof entry !== 'object') continue
+      const accountId = text(entry.accountId, 128)
+      const userId = text(entry.userId, 128)
+      const message = entry.message
+      if (!accountId || !userId || !message || typeof message !== 'object') continue
+      // A runaway payload would bloat every later state write.
+      let serialized = ''
+      try {
+        serialized = JSON.stringify(message)
+      } catch {
+        continue
+      }
+      if (serialized.length > MAX_PENDING_MESSAGE_BYTES) continue
+      const attempts = Number(entry.attempts)
+      pendingInbound.push({
+        accountId,
+        userId,
+        message,
+        at: Number.isFinite(Number(entry.at)) ? Number(entry.at) : Date.now(),
+        attempts: Number.isFinite(attempts) && attempts >= 0 ? attempts : 0,
+      })
+      if (pendingInbound.length >= MAX_PENDING_INBOUND) break
+    }
+  }
+
   const scenarios = normalizeScenarios(source)
 
   return {
@@ -283,6 +324,7 @@ export function normalizeState(raw) {
     bindings,
     contextTokens,
     quoteCache,
+    pendingInbound,
     // Where a permission prompt is offered. `phone` claims the request and the
     // desk never sees it; `desktop` delegates and the channel stays out. Anything
     // else — a first run, or a stored 'both' from the withdrawn race mode — is

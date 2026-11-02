@@ -678,6 +678,90 @@ export function createChannel(options) {
     if (key) seen.delete(key)
   }
 
+  /** How many replays a failed message gets before it is abandoned. */
+  const MAX_PENDING_ATTEMPTS = 3
+
+  /**
+   * Keep a message that failed twice, so the next start can try it again.
+   *
+   * The poll cursor has already moved past it, so the gateway will never resend it.
+   * Replay is at-least-once: a message that threw after delivery may be delivered
+   * again, which is the trade taken over losing it silently.
+   */
+  function queuePendingInbound(accountId, userId, message) {
+    const id = String((message && message.message_id) || '')
+    if (!id) return
+    const state = readState()
+    const list = Array.isArray(state.pendingInbound) ? [...state.pendingInbound] : []
+    const index = list.findIndex((entry) => String(entry.message?.message_id || '') === id)
+    const previous = index >= 0 ? Number(list[index].attempts) || 0 : 0
+    const record = { accountId, userId, message, at: Date.now(), attempts: previous + 1 }
+    if (index >= 0) list[index] = record
+    else list.push(record)
+    // Oldest first out, so a burst of failures cannot grow without bound.
+    while (list.length > 20) list.shift()
+    try {
+      updateState({ pendingInbound: list })
+    } catch {
+      /* a failed write must not cascade into another failure */
+    }
+  }
+
+  function dropPendingInbound(messageId) {
+    const id = String(messageId || '')
+    if (!id) return
+    const state = readState()
+    const list = Array.isArray(state.pendingInbound) ? state.pendingInbound : []
+    const next = list.filter((entry) => String(entry.message?.message_id || '') !== id)
+    if (next.length === list.length) return
+    try {
+      updateState({ pendingInbound: next })
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /**
+   * Try the messages that failed last time.
+   *
+   * Runs once at start, before polling resumes. Ids are released from the duplicate
+   * guard first, because they were registered before the failure.
+   */
+  async function replayPendingInbound() {
+    const entries = readState().pendingInbound
+    if (!Array.isArray(entries) || entries.length === 0) return
+    const accounts = new Map(readState().accounts.map((account) => [account.accountId, account]))
+    let delivered = 0
+    for (const entry of entries) {
+      const account = accounts.get(entry.accountId)
+      if (!account) {
+        // The account was removed; the message has nowhere to go.
+        dropPendingInbound(entry.message?.message_id)
+        continue
+      }
+      forget(entry.message?.message_id)
+      try {
+        await handleInbound(account, entry.message, new AbortController().signal)
+        dropPendingInbound(entry.message?.message_id)
+        delivered += 1
+      } catch (error) {
+        const attempts = (Number(entry.attempts) || 0) + 1
+        if (attempts >= MAX_PENDING_ATTEMPTS) {
+          note(
+            'inbound',
+            `dropped after ${attempts} attempts | ${String(entry.message?.message_id || '').slice(-12)} | ${String(
+              (error && error.message) || error,
+            ).slice(0, 120)}`,
+          )
+          dropPendingInbound(entry.message?.message_id)
+        } else {
+          queuePendingInbound(entry.accountId, entry.userId, entry.message)
+        }
+      }
+    }
+    if (delivered > 0) note('inbound', `replayed ${delivered} pending`)
+  }
+
   /** A media-only message has no text, but it is still quotable as "[图片]". */
   function labelOfMessage(message) {
     const items = mediaItemsOf(message)
@@ -2180,6 +2264,9 @@ export function createChannel(options) {
                 (retryError && retryError.message) || retryError,
               ).slice(0, 200)}`,
             )
+            // Kept on disk so the next start can try again: the cursor has moved past
+            // this message and the gateway will not resend it.
+            queuePendingInbound(account.accountId, String(message?.from_user_id || ''), message)
             recordError(account.accountId, retryError)
           }
         }
@@ -2208,6 +2295,10 @@ export function createChannel(options) {
       quotePruneTimer = setInterval(() => pruneQuoteCache(), QUOTE_PRUNE_INTERVAL_MS)
       if (typeof quotePruneTimer.unref === 'function') quotePruneTimer.unref()
     }
+    // Messages that failed twice last time get one more chance, once, at start.
+    void replayPendingInbound().catch((error) => {
+      note('inbound', `replay failed | ${String((error && error.message) || error).slice(0, 200)}`)
+    })
   }
 
   function stopAccount(accountId) {
@@ -2254,6 +2345,7 @@ export function createChannel(options) {
       activeSessions: replyTargets.size,
       pendingApprovals: pendingApprovals.size,
       pendingQuestions: pendingQuestions.size,
+      pendingInbound: (readState().pendingInbound || []).length,
       pendingMerges: contentBuffers.size,
       events: events.slice(-24),
     }
@@ -2264,6 +2356,7 @@ export function createChannel(options) {
     handleAssistantStream,
     handleApproval,
     handleQuestion,
+    replayPendingInbound,
     sendFileToConversation,
     sendTextToConversation,
     startAccount,

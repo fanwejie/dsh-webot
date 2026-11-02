@@ -21,6 +21,7 @@
  */
 
 import crypto from 'node:crypto'
+import dns from 'node:dns/promises'
 
 /** CDN host for every media download. */
 export const CDN_BASE_URL = 'https://novac2c.cdn.weixin.qq.com/c2c'
@@ -38,16 +39,111 @@ export function buildDownloadUrl({ encryptQueryParam, fullUrl, cdnBaseUrl }) {
 }
 
 /**
+ * Parse a textual IP into its bytes, or return null when it is not an IP at all.
+ *
+ * Brackets are stripped first: `new URL()` keeps them on an IPv6 hostname, which is why
+ * a plain `/^fc/` test never matched `[fc00::1]` and let unique-local addresses through.
+ */
+function ipBytes(text) {
+  const raw = String(text || '').replace(/^\[|\]$/g, '')
+  if (!raw) return null
+
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(raw)) {
+    const parts = raw.split('.').map(Number)
+    if (parts.some((n) => n > 255)) return null
+    return Buffer.from(parts)
+  }
+  if (!/^[0-9a-f:.]+$/i.test(raw) || !raw.includes(':')) return null
+
+  // An IPv6 address may end in a dotted IPv4 tail (`::ffff:127.0.0.1`); turn that into
+  // two hex groups so one parser handles every shape.
+  let text6 = raw
+  const tail = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(text6)
+  if (tail) {
+    const v4 = tail[1].split('.').map(Number)
+    if (v4.some((n) => n > 255)) return null
+    const hi = ((v4[0] << 8) | v4[1]).toString(16)
+    const lo = ((v4[2] << 8) | v4[3]).toString(16)
+    text6 = `${text6.slice(0, tail.index)}${hi}:${lo}`
+  }
+
+  const halves = text6.split('::')
+  if (halves.length > 2) return null
+  const head = halves[0] ? halves[0].split(':') : []
+  const rest = halves.length === 2 && halves[1] ? halves[1].split(':') : []
+  const missing = 8 - head.length - rest.length
+  if (halves.length === 2 ? missing < 0 : missing !== 0) return null
+  const groups = halves.length === 2 ? [...head, ...Array(missing).fill('0'), ...rest] : head
+  if (groups.length !== 8) return null
+
+  const buffer = Buffer.alloc(16)
+  for (const [index, group] of groups.entries()) {
+    if (!/^[0-9a-f]{1,4}$/i.test(group)) return null
+    buffer.writeUInt16BE(parseInt(group, 16), index * 2)
+  }
+  return buffer
+}
+
+/** Ranges that must never be fetched, by the bytes of the address. */
+function isPrivateV4([a, b]) {
+  return (
+    a === 0 || // 0.0.0.0/8
+    a === 10 || // 10/8
+    a === 127 || // loopback
+    (a === 100 && b >= 64 && b <= 127) || // 100.64/10 carrier NAT
+    (a === 169 && b === 254) || // link local
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168) ||
+    (a === 192 && b === 0) || // 192.0.0/24, 192.0.2/24 test nets
+    (a === 198 && (b === 18 || b === 19)) || // benchmarking
+    a >= 224 // multicast, reserved, broadcast
+  )
+}
+
+/**
+ * Whether an address literal points somewhere this plugin must not reach.
+ *
+ * Covers IPv4, IPv6, and IPv4-mapped IPv6 (`::ffff:127.0.0.1`, which the URL parser
+ * normalises to `::ffff:7f00:1` — the shape that slipped through the first attempt).
+ */
+export function isPrivateAddress(text) {
+  const bytes = ipBytes(text)
+  if (!bytes) return false
+  if (bytes.length === 4) return isPrivateV4(bytes)
+
+  // IPv4-mapped and NAT64 addresses carry an IPv4 address in the last four bytes; they
+  // reach the same host, so they get the same verdict.
+  const isMapped =
+    (bytes.subarray(0, 10).every((byte) => byte === 0) && bytes[10] === 0xff && bytes[11] === 0xff) ||
+    (bytes[0] === 0x00 &&
+      bytes[1] === 0x64 &&
+      bytes[2] === 0xff &&
+      bytes[3] === 0x9b &&
+      bytes.subarray(4, 12).every((byte) => byte === 0))
+  if (isMapped) return isPrivateV4(bytes.subarray(12))
+
+  const unspecified = bytes.every((byte) => byte === 0)
+  if (unspecified) return true
+  const loopback = bytes.subarray(0, 15).every((byte) => byte === 0) && bytes[15] === 1
+  if (loopback) return true
+  const linkLocal = bytes[0] === 0xfe && (bytes[1] & 0xc0) === 0x80 // fe80::/10
+  if (linkLocal) return true
+  const uniqueLocal = (bytes[0] & 0xfe) === 0xfc // fc00::/7
+  if (uniqueLocal) return true
+  return false
+}
+
+/**
  * Refuse a download URL that does not point at a public HTTPS host.
  *
  * `full_url` comes from the gateway response and is used verbatim, so without this the
  * plugin will fetch whatever address an upstream payload names — including
  * `http://127.0.0.1:…` or a private-range IP, which is the shape of an SSRF. Tencent's
- * CDN is always HTTPS, so requiring HTTPS costs nothing. Private, loopback and
- * link-local literals are refused outright; any other public host is allowed, because
- * the CDN hostname is not contractual and a hard allowlist would break downloads
- * silently the day it changes. A host outside the WeChat domains is logged once rather
- * than blocked.
+ * CDN is always HTTPS, so requiring HTTPS costs nothing.
+ *
+ * Literal private addresses are refused here; a *name* that resolves to one is refused
+ * by `assertPublicMediaUrl`, which also resolves it. Neither of these stops a DNS
+ * rebinding attack on its own — see the note there.
  *
  * @throws when the URL is not something this plugin should be fetching.
  */
@@ -62,20 +158,45 @@ export function assertSafeMediaUrl(rawUrl, label = 'CDN') {
     throw new Error(`${label}: 下载地址必须是 https，收到 ${url.protocol}//${url.host}`)
   }
   const host = url.hostname.toLowerCase()
-  const isIpLiteral = /^\[?[0-9a-f:.]+\]?$/.test(host)
-  if (isIpLiteral) {
-    const isLoopbackOrPrivate =
-      /^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(host) ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
-      host === '::1' ||
-      host === '[::1]' ||
-      /^fe80:/i.test(host) ||
-      /^fc|^fd/i.test(host)
-    if (isLoopbackOrPrivate) {
-      throw new Error(`${label}: 下载地址指向内网/本机地址 ${host}，已拒绝`)
-    }
+  if (ipBytes(host) && isPrivateAddress(host)) {
+    throw new Error(`${label}: 下载地址指向内网/本机地址 ${host}，已拒绝`)
   }
   return url.toString()
+}
+
+/** Resolver used for the host check; injectable so tests do not need DNS. */
+let resolveHost = async (host) => (await dns.lookup(host, { all: true })).map((e) => e.address)
+
+/** Replace the resolver. Tests only. */
+export function setMediaHostResolver(fn) {
+  resolveHost = fn
+}
+
+/**
+ * `assertSafeMediaUrl`, plus a check of what the name actually resolves to.
+ *
+ * A public-looking name can point at 127.0.0.1. Resolving and checking every answer
+ * closes the obvious form of that. It does not defeat DNS rebinding — the resolver is
+ * consulted twice and the second answer could differ — because `fetch` offers no hook to
+ * pin the connection to a chosen address. That residual risk is documented rather than
+ * papered over: an attacker would already need to control the media URL handed out by
+ * Tencent's gateway for this to be reachable at all.
+ */
+export async function assertPublicMediaUrl(rawUrl, label = 'CDN') {
+  const safe = assertSafeMediaUrl(rawUrl, label)
+  const host = new URL(safe).hostname.replace(/^\[|\]$/g, '')
+  if (ipBytes(host)) return safe // literal, already checked
+  let addresses
+  try {
+    addresses = await resolveHost(host)
+  } catch (error) {
+    throw new Error(`${label}: 无法解析下载主机 ${host}（${String(error && error.message)}）`)
+  }
+  const blocked = addresses.find((address) => isPrivateAddress(address))
+  if (blocked) {
+    throw new Error(`${label}: 下载主机 ${host} 解析到内网地址 ${blocked}，已拒绝`)
+  }
+  return safe
 }
 
 /** How long one media download may take, independent of the surrounding turn. */
@@ -158,6 +279,68 @@ function decryptEcb(ciphertext, key) {
   }
 }
 
+/** How many redirects a media download may follow before it is treated as a loop. */
+const MAX_MEDIA_REDIRECTS = 3
+
+/** How much of an error response body is read, so a huge page cannot be buffered. */
+const MAX_ERROR_BODY_BYTES = 4 * 1024
+
+/**
+ * Combine two abort signals without requiring `AbortSignal.any`.
+ *
+ * `AbortSignal.any` arrived in Node 20.3, while this plugin declares engines `>=20`: on
+ * 20.0–20.2 the old code silently dropped the download timeout whenever the caller
+ * passed its own signal, which is the only path that matters here.
+ */
+function combineSignals(first, second) {
+  if (!first) return second
+  if (!second) return first
+  if (AbortSignal.any) return AbortSignal.any([first, second])
+  const controller = new AbortController()
+  const forward = (signal) => {
+    if (signal.aborted) controller.abort(signal.reason)
+    else signal.addEventListener('abort', () => controller.abort(signal.reason), { once: true })
+  }
+  forward(first)
+  forward(second)
+  return controller.signal
+}
+
+/** Read at most `limitBytes` of a body, for error messages. */
+async function readErrorBody(response, limitBytes) {
+  try {
+    if (!response.body || typeof response.body.getReader !== 'function') {
+      const text = await response.text()
+      return text.slice(0, 200)
+    }
+    const reader = response.body.getReader()
+    const chunks = []
+    let total = 0
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        total += value.length
+        chunks.push(Buffer.from(value))
+        if (total >= limitBytes) {
+          await reader.cancel().catch(() => {})
+          break
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+    return Buffer.concat(chunks, Math.min(total, limitBytes)).toString('utf8').slice(0, 200)
+  } catch {
+    return ''
+  }
+}
+
+/** A status that carries a `location` to follow. */
+function isRedirectStatus(status) {
+  return status === 301 || status === 302 || status === 303 || status === 307 || status === 308
+}
+
 /**
  * Download one media reference and answer its plaintext bytes.
  *
@@ -165,24 +348,39 @@ function decryptEcb(ciphertext, key) {
  * `aeskey`/`aes_key` needs.
  */
 export async function downloadMedia({ encryptQueryParam, aesKeyBase64, fullUrl, cdnBaseUrl, signal, label }) {
-  const url = assertSafeMediaUrl(
+  const name = label || 'CDN'
+  let url = await assertPublicMediaUrl(
     buildDownloadUrl({ encryptQueryParam, fullUrl, cdnBaseUrl }),
-    label || 'CDN',
+    name,
   )
 
-  const timeout = AbortSignal.timeout
-    ? AbortSignal.timeout(MEDIA_FETCH_TIMEOUT_MS)
-    : undefined
-  const combined =
-    signal && timeout && AbortSignal.any ? AbortSignal.any([signal, timeout]) : signal || timeout
+  const timeout = AbortSignal.timeout ? AbortSignal.timeout(MEDIA_FETCH_TIMEOUT_MS) : undefined
+  const combined = combineSignals(signal, timeout)
 
-  const response = await fetch(url, combined ? { signal: combined } : undefined)
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    throw new Error(`${label}: CDN 下载失败 HTTP ${response.status} ${body.slice(0, 200)}`)
+  // Redirects are followed by hand: `fetch` follows them internally, which means the
+  // final address never passes the checks above. Each hop is validated the same way as
+  // the first, so a redirect cannot walk the request into a private network.
+  let response
+  for (let hop = 0; ; hop += 1) {
+    response = await fetch(url, { signal: combined, redirect: 'manual' })
+    if (!isRedirectStatus(response.status)) break
+    const location = response.headers.get('location')
+    if (!location) {
+      throw new Error(`${name}: HTTP ${response.status} 重定向缺少 location`)
+    }
+    if (hop >= MAX_MEDIA_REDIRECTS) {
+      throw new Error(`${name}: 重定向超过 ${MAX_MEDIA_REDIRECTS} 次，已放弃`)
+    }
+    const next = new URL(location, url).toString()
+    url = await assertPublicMediaUrl(next, name)
   }
 
-  const encrypted = await readWithLimit(response, MAX_MEDIA_BYTES, label)
+  if (!response.ok) {
+    const body = await readErrorBody(response, MAX_ERROR_BODY_BYTES)
+    throw new Error(`${name}: CDN 下载失败 HTTP ${response.status} ${body}`)
+  }
+
+  const encrypted = await readWithLimit(response, MAX_MEDIA_BYTES, name)
 
   if (!aesKeyBase64) return encrypted
   return decryptEcb(encrypted, parseAesKey(aesKeyBase64))

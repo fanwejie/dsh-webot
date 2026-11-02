@@ -719,27 +719,53 @@ Package name, patch row id and the `client.js` module id must stay equal
 
 ## What a download and a send are allowed to do
 
-**A download URL is checked.** The media address comes from `full_url` in the gateway
-response and used to be fetched verbatim. It now has to be:
+**A download URL passes three checks.** The media address comes from `full_url` in the
+gateway response and used to be fetched verbatim.
 
-- **https**;
-- not a loopback, private or link-local address (`127.`, `10.`, `192.168.`, `172.16–31.`,
-  `169.254.`, `0.`, `::1`, `fe80::`, `fc00::/7`) — refused outright;
-- any other public host — allowed, because the CDN hostname is not contractual and a hard
-  allowlist would break downloads the day it changes.
+1. **https** is required;
+2. **loopback, private and link-local addresses are refused** — IPv4 and IPv6 both,
+   including IPv4 wrapped inside IPv6 (`::ffff:127.0.0.1`, which the URL parser
+   normalises to `::ffff:7f00:1` — the shape the first attempt missed);
+3. **what the name resolves to is checked too**: a public name pointing at `10.x` is
+   refused as well;
+4. **redirects are followed by hand**, and every hop is re-checked the same way — letting
+   `fetch` follow them means the final address never passes a check at all.
 
-**The size ceiling is a real ceiling.** The old order read `content-length`, then pulled
-the whole body into memory with `arrayBuffer()`, then compared against 30 MB — with an
-absent or lying header the memory was already spent. The body is now read in chunks and
-the stream cancelled the moment the running total passes the limit, with a 60 s timeout
-per download.
+Any other public host is allowed: the CDN name is not contractual, and a hard allowlist
+would break downloads silently the day it changes.
+
+⚠️ **Not solved: DNS rebinding.** The resolution check and the connection are two
+separate lookups, and `fetch` offers no way to pin the address, so the second answer could
+differ. Exploiting that requires controlling the media URL Tencent's gateway hands out —
+a high bar, but this is not claimed to be closed.
+
+**The size ceiling is a real ceiling.** The old order read `content-length`, pulled the
+whole body in with `arrayBuffer()`, then compared against 30 MB — with an absent or lying
+header the memory was already spent. The body is now read in chunks and the stream
+cancelled the moment the running total passes the limit; **error bodies are capped at
+4 KB**; and each download has a 60 s timeout that also works on Node 20.0–20.2, where
+`AbortSignal.any` does not exist (the signals are combined by hand).
 
 **Sending a file allows an absolute path, on purpose.** The agent may send any file on
 this machine to the bound WeChat account — that is what makes "send me that PDF on the
-desktop" work. It grants no extra privilege: an agent that can read that file can already
-open it with its own file tools. The real boundary is DSH's tool permissions and sandbox
-policy, not this plugin. Every send logs `send-media target=… path=…` so it can be
-audited afterwards.
+desktop" work. It grants no privilege the agent does not already have through its file
+tools; the real boundary is DSH's tool permissions and sandbox policy. Every send logs
+`send-media target=… path=…`, and **that line contains a local absolute path**, so the log
+file's own permissions are yours to manage.
+
+## A message is not lost to one failure
+
+The poll cursor is persisted **before** the batch is handled: that keeps the gateway from
+replaying a message, but it also means a message whose handling throws is never fetched
+again.
+
+So a failing message is retried once in place (with its duplicate guard released); if that
+fails it is written to `pendingInbound` in `state.json` (max 20) and replayed at the next
+start, and three consecutive failures abandon it with a `dropped after N attempts` line.
+
+⚠️ **At-least-once.** A message that was delivered and then threw later may be delivered
+a second time on replay. Between "possibly duplicated" and "possibly lost", this chooses
+the former: a duplicate is visible, a loss is not.
 
 ## Tests
 
@@ -747,9 +773,10 @@ audited afterwards.
 npm test
 ```
 
-Covers quote resolution (full / partial / picture / voice / cleared), 64-bit id
-precision, the download URL guard, the streaming size cap, and that a failed approval
-notification leaves no pending wait behind.
+41 cases: quote resolution (full / partial / picture / voice / cleared), 64-bit id
+precision, the download guard (IPv6, mapped addresses, DNS, redirects), the streaming
+size cap, the error-body limit, the approval regression, and the durable replay of failed
+messages.
 
 ## The protocol layer
 
