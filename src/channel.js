@@ -212,15 +212,35 @@ export function quotedOf(message, lookup) {
 
   const id = quoteRefId(message)
   let cached = ''
+  let cachedMedia = null
   if (typeof lookup === 'function' && id) {
     try {
-      cached = String(lookup(id) || '').trim()
+      const hit = lookup(id)
+      if (hit && typeof hit === 'object') {
+        cached = String(hit.body || '').trim()
+        cachedMedia = hit.media || null
+      } else {
+        cached = String(hit || '').trim()
+      }
     } catch {
       cached = ''
     }
   }
 
-  const content = selected || body || summary || cached
+  // A quoted picture or file is only useful if the agent is told where it is: the point
+  // of quoting a screenshot is to have it looked at, and "[图片]" alone gives it nothing
+  // to open.
+  let mediaLine = ''
+  if (cachedMedia && cachedMedia.path) {
+    mediaLine = cachedMedia.transcript
+      ? `[微信语音] 转写：${cachedMedia.transcript}`
+      : `[微信${cachedMedia.label}] ${cachedMedia.path}（${cachedMedia.bytes} 字节）`
+  }
+
+  // The media line wins over the cached body when both exist: the body for a file is
+  // often just the label ("[图片]"), while the line carries the path the agent needs —
+  // and for a voice note it carries the transcript instead of the word "语音".
+  const content = selected || body || summary || mediaLine || cached
   if (!content) {
     // The id stays out of the prompt: it means nothing to the agent, and the point of
     // the message is only that this content is gone.
@@ -648,12 +668,14 @@ export function createChannel(options) {
   }
 
   /**
-   * Recent message bodies, keyed by message id.
+   * Recent message bodies, keyed by exact message id.
    *
-   * A quote reply from the current WeChat client carries only `ref.svr_id` — the body
-   * is not in the payload, so the only way to show what was quoted is to have seen
-   * that message earlier. Bounded and in memory: a restart loses it, which costs the
-   * quoted text for quotes that cross a restart, nothing else.
+   * A quote reply names the quoted message and sends no body of its own, so the only
+   * way to show what was quoted is to have seen that message earlier. Entries hold a
+   * body and, for a picture or a file, where it was saved — a quote of a screenshot is
+   * meant to be looked at, which the path is what makes possible.
+   *
+   * Written to the state file and dropped after the retention window.
    */
   const quoteCache = new Map()
 
@@ -680,7 +702,8 @@ export function createChannel(options) {
         dropped += 1
         continue
       }
-      quoteCache.set(id, { body, at: at || Date.now() })
+      const media = entry[3] && typeof entry[3] === 'object' ? entry[3] : null
+      quoteCache.set(id, media ? { body, at: at || Date.now(), media } : { body, at: at || Date.now() })
     }
     if (dropped > 0) {
       quoteDirty = true
@@ -709,7 +732,11 @@ export function createChannel(options) {
     try {
       // The whole file is rewritten, so an expired body is not left behind in it.
       updateState({
-        quoteCache: [...quoteCache.entries()].map(([id, entry]) => [id, entry.body, entry.at]),
+        quoteCache: [...quoteCache.entries()].map(([id, entry]) =>
+          entry.media
+            ? [id, entry.body, entry.at, entry.media]
+            : [id, entry.body, entry.at],
+        ),
       })
     } catch {
       /* the cache is an optimisation; a failed write must not break delivery */
@@ -739,10 +766,14 @@ export function createChannel(options) {
     return removed
   }
 
-  /** The body behind a quoted id, or '' when it was never seen or is past retention. */
+  /**
+   * The entry behind a quoted id, or null when it was never seen or is past retention.
+   *
+   * Returns `{ body, media }` so a quoted file can carry its path through to the prompt.
+   */
   function lookupQuote(id) {
     const key = String(id || '').trim()
-    if (!key) return ''
+    if (!key) return null
 
     let entry = quoteCache.get(key)
     let matched = key
@@ -760,29 +791,31 @@ export function createChannel(options) {
         }
       }
     }
-    if (!entry) return ''
+    if (!entry) return null
 
     if (Date.now() - entry.at > QUOTE_RETENTION_MS) {
       quoteCache.delete(matched)
       quoteDirty = true
       scheduleQuoteFlush()
-      return ''
+      return null
     }
-    return entry.body
+    return { body: entry.body, media: entry.media || null }
   }
 
-  function rememberQuote(id, body) {
+  function rememberQuote(id, body, media) {
     const key = String(id || '').trim()
     if (!key || !body) return
     const existing = quoteCache.get(key)
     if (existing && existing.body === body) {
       // Refresh the timestamp: the same message seen again restarts its window.
       existing.at = Date.now()
+      // A file is cached before it is downloaded and again once its path is known.
+      if (media) existing.media = media
       quoteDirty = true
       scheduleQuoteFlush()
       return
     }
-    quoteCache.set(key, { body, at: Date.now() })
+    quoteCache.set(key, { body, at: Date.now(), ...(media ? { media } : {}) })
     if (quoteCache.size > QUOTE_CACHE_LIMIT) {
       const oldest = quoteCache.keys().next().value
       quoteCache.delete(oldest)
@@ -919,11 +952,15 @@ export function createChannel(options) {
    * agent's working directory — so it can open it with its own tools. The prompt
    * carries the relative path; the bytes are not embedded as an attachment
    * block, which would need the Host attachment service and is a separate step.
+   *
+   * Returns `{ note, media }`: the note is what goes into the prompt, and `media` is
+   * what the quote cache keeps, so a later quote of this message can hand the agent
+   * the same file again instead of a bare "[图片]".
    */
   async function saveInboundMedia(item, cwd) {
     const payload = mediaPayload(item)
     const media = payload && payload.media
-    if (!media || (!media.encrypt_query_param && !media.full_url)) return ''
+    if (!media || (!media.encrypt_query_param && !media.full_url)) return null
 
     const label = MEDIA_ITEM_LABELS.get(item.type) || '附件'
     // An image's `aeskey` is the raw key in hex; `media.aes_key` is base64 of the
@@ -955,6 +992,7 @@ export function createChannel(options) {
 
     const relative = path.relative(cwd, target).split(path.sep).join('/')
     note('media', `${label} | ${buffer.length} bytes | ${relative}`)
+    const descriptor = { label, path: relative, bytes: buffer.length }
 
     // A voice note is the one media type with two independent paths to meaning:
     // the service's transcription, and the SILK payload. SILK needs a decoder
@@ -966,13 +1004,16 @@ export function createChannel(options) {
         payload && typeof payload.text === 'string' ? payload.text.trim() : ''
       if (transcript) {
         note('voice', `transcript ${transcript.length} chars | ${transcript.slice(0, 40)}`)
-        return ''
+        return { note: '', media: { ...descriptor, transcript } }
       }
       note('voice', 'no transcript in payload')
-      return `[微信语音] 已保存到 ${relative}（${buffer.length} 字节），但这条语音没有附带转写文字，内容无法识别。`
+      return {
+        note: `[微信语音] 已保存到 ${relative}（${buffer.length} 字节），但这条语音没有附带转写文字，内容无法识别。`,
+        media: descriptor,
+      }
     }
 
-    return `[微信${label}] 已保存到 ${relative}（${buffer.length} 字节）`
+    return { note: `[微信${label}] 已保存到 ${relative}（${buffer.length} 字节）`, media: descriptor }
   }
 
   /**
@@ -1243,12 +1284,29 @@ export function createChannel(options) {
     if (mediaItems.length > 0) {
       const mergeMs = (readState().mediaMergeSec ?? 20) * 1000
       if (mergeMs > 0) {
-        queueContent(sessionKey, { account, userId, contextToken, text: promptText, mediaItems, signal, mergeMs })
+        queueContent(sessionKey, {
+          account,
+          userId,
+          contextToken,
+          text: promptText,
+          mediaItems,
+          signal,
+          mergeMs,
+          messageId,
+        })
         return
       }
       // Window set to zero: the setting's off switch, delivered with any text it
       // arrived with so a caption still travels with its picture.
-      await deliverToSession({ account, userId, contextToken, texts: [promptText], mediaItems, signal })
+      await deliverToSession({
+        account,
+        userId,
+        contextToken,
+        texts: [promptText],
+        mediaItems,
+        signal,
+        messageId,
+      })
       return
     }
 
@@ -1266,6 +1324,7 @@ export function createChannel(options) {
       texts: [promptText],
       mediaItems: [],
       signal,
+      messageId,
     })
   }
 
@@ -1275,7 +1334,16 @@ export function createChannel(options) {
    * Extracted so the immediate path and the merged path cannot drift apart — the
    * buffered version is the same delivery, one step later.
    */
-  async function deliverToSession({ account, userId, contextToken, texts, mediaItems, signal }) {
+  async function deliverToSession({
+    account,
+    userId,
+    contextToken,
+    texts,
+    mediaItems,
+    mediaOwnerIds,
+    signal,
+    messageId,
+  }) {
     const sessionId = await ensureSession(account, userId)
     replyTargets.set(sessionId, { accountId: account.accountId, toUserId: userId, contextToken })
     note('session', sessionId)
@@ -1284,10 +1352,18 @@ export function createChannel(options) {
       readState().bindings[`${account.accountId}:${userId}`]?.cwd || workspaceDirectory
     const mediaNotes = []
     const mediaLimit = readState().mediaMaxPerMessage || MAX_MEDIA_PER_MESSAGE
-    for (const item of mediaItems.slice(0, mediaLimit)) {
+    for (const [index, item] of mediaItems.slice(0, mediaLimit).entries()) {
       try {
         const saved = await saveInboundMedia(item, bindingCwd)
-        if (saved) mediaNotes.push(saved)
+        if (!saved) continue
+        if (saved.note) mediaNotes.push(saved.note)
+        // The file is on disk now, so the quote cache can remember where it is. Without
+        // this a quoted picture resolves to the word "[图片]" and the agent has nothing
+        // to open.
+        const ownerId = (mediaOwnerIds && mediaOwnerIds[index]) || messageId
+        if (ownerId && saved.media) {
+          rememberQuote(ownerId, saved.note || `[微信${saved.media.label}]`, saved.media)
+        }
       } catch (error) {
         note('media', `failed | ${String((error && error.message) || error)}`)
       }
@@ -1387,7 +1463,11 @@ export function createChannel(options) {
   }
 
   /** Hold a file (and any text that came with it) until the window closes. */
-  function queueContent(key, { account, userId, contextToken, text, mediaItems, signal, mergeMs }) {    let held = contentBuffers.get(key)
+  function queueContent(
+    key,
+    { account, userId, contextToken, text, mediaItems, signal, mergeMs, messageId },
+  ) {
+    let held = contentBuffers.get(key)
     if (!held) {
       held = {
         account,
@@ -1395,6 +1475,8 @@ export function createChannel(options) {
         contextToken,
         texts: [],
         mediaItems: [],
+        // One id per held item, so each saved file is quoted under its own message.
+        mediaOwnerIds: [],
         signal: signal || new AbortController().signal,
         timer: null,
       }
@@ -1402,6 +1484,7 @@ export function createChannel(options) {
     }
     if (text) held.texts.push(text)
     held.mediaItems.push(...mediaItems)
+    if (messageId) held.mediaOwnerIds.push(...mediaItems.map(() => messageId))
     if (signal) held.signal = signal
     if (held.timer) clearTimeout(held.timer)
     held.timer = setTimeout(() => {
@@ -1430,6 +1513,7 @@ export function createChannel(options) {
       contextToken: held.contextToken,
       texts,
       mediaItems: held.mediaItems,
+      mediaOwnerIds: held.mediaOwnerIds,
       signal: held.signal,
     })
   }

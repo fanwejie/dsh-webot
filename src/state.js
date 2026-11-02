@@ -239,10 +239,13 @@ export function normalizeState(raw) {
 
   // Recent message bodies, so a quote that arrives as an id alone can be resolved.
   //
-  // Stored as [id, body, keptAt] in arrival order. This has to survive a restart: the
-  // quotes people send are almost always of older messages, and an in-memory-only
-  // cache is empty exactly when it is needed. `keptAt` is what makes the retention
-  // window enforceable across restarts; nothing outlives it.
+  // Stored as [id, body, keptAt, media?] in arrival order. This has to survive a
+  // restart: the quotes people send are almost always of older messages, and an
+  // in-memory-only cache is empty exactly when it is needed. `keptAt` is what makes the
+  // retention window enforceable across restarts; nothing outlives it.
+  //
+  // `media` is where a quoted picture or file was saved, so quoting one gives the agent
+  // something to open instead of the word "[图片]".
   const quoteCache = []
   if (Array.isArray(source.quoteCache)) {
     for (const entry of source.quoteCache) {
@@ -251,7 +254,22 @@ export function normalizeState(raw) {
       const body = text(entry[1], 4096)
       if (!id || !body) continue
       const keptAt = Number(entry[2])
-      quoteCache.push([id, body, Number.isFinite(keptAt) && keptAt > 0 ? keptAt : Date.now()])
+      const row = [id, body, Number.isFinite(keptAt) && keptAt > 0 ? keptAt : Date.now()]
+      const media = entry[3]
+      if (media && typeof media === 'object') {
+        const label = text(media.label, 16)
+        const mediaPath = text(media.path, 512)
+        if (label && mediaPath) {
+          const bytes = Number(media.bytes)
+          row.push({
+            label,
+            path: mediaPath,
+            bytes: Number.isFinite(bytes) && bytes >= 0 ? bytes : 0,
+            ...(media.transcript ? { transcript: text(media.transcript, 4096) } : {}),
+          })
+        }
+      }
+      quoteCache.push(row)
       if (quoteCache.length >= MAX_QUOTE_ENTRIES) break
     }
   }
