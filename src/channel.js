@@ -781,12 +781,14 @@ export function createChannel(options) {
       result.message_id || result.msg_id || result.msgid || result.svr_id || result.server_id || ''
     if (id) {
       rememberQuote(id, body)
-      return
     }
-    // Once is enough to learn whether this gateway hands ids back at all.
+    // Once is enough to learn what this gateway hands back; the keys are not content.
     if (!outboundAckLogged) {
       outboundAckLogged = true
-      note('send-ack', `no id in response | keys=${Object.keys(result).join(',') || '(none)'}`)
+      note(
+        'send-ack',
+        `${id ? `id=${String(id)}` : 'no id'} | keys=${Object.keys(result).join(',') || '(none)'}`,
+      )
     }
   }
 
@@ -1073,6 +1075,7 @@ export function createChannel(options) {
     // they are worth keeping: a user quoting the bot's reply carries only that id.
     if (message.message_type !== MESSAGE_TYPE_USER) {
       rememberQuote(message.message_id, textOf(message).trim() || labelOfMessage(message))
+      note('ids', `bot mid=${String(message.message_id || '')} seq=${String(message.seq ?? '')}`)
       return
     }
 
@@ -1085,6 +1088,24 @@ export function createChannel(options) {
     // is anything to deliver.
     if (!text && mediaItems.length === 0) return
 
+    // Which ids this message actually carries. Temporary: the quote payload names a
+    // message by an id the bot has never seen a field for, so the raw shapes have to be
+    // compared rather than guessed at.
+    {
+      const ids = [
+        `mid=${String(message.message_id || '')}`,
+        `seq=${String(message.seq ?? '')}`,
+        `cid=${String(message.client_id || '')}`,
+        `sid=${String(message.session_id || '')}`,
+        `run=${String(message.run_id || '')}`,
+      ].join(' ')
+      note('ids', ids)
+      const holder = (Array.isArray(message.item_list) ? message.item_list : []).find(
+        (item) => item && typeof item === 'object' && item.ref_msg,
+      )
+      if (holder) note('ref', JSON.stringify(holder.ref_msg).slice(0, 400))
+    }
+
     // Every message the bot has seen becomes quotable context: the current WeChat
     // client sends a quote as an id with no content, so the body has to come from here.
     const messageId = String(message.message_id || '')
@@ -1092,6 +1113,11 @@ export function createChannel(options) {
     // `svr_id` may also be the sequence number, so both are kept as keys.
     if (message.seq !== undefined && message.seq !== null) {
       rememberQuote(message.seq, text || labelOfMessage(message))
+    }
+    // The WeChat client generates `client_id` for messages it sends; a quote may name
+    // the message by that rather than by the gateway's id.
+    if (message.client_id) {
+      rememberQuote(message.client_id, text || labelOfMessage(message))
     }
 
     // A quote reply puts the quoted message in a separate item. Keeping it out of
