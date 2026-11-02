@@ -743,10 +743,27 @@ export function createChannel(options) {
   function lookupQuote(id) {
     const key = String(id || '').trim()
     if (!key) return ''
-    const entry = quoteCache.get(key)
+
+    let entry = quoteCache.get(key)
+    let matched = key
+    if (!entry) {
+      // Entries cached before 1.0.6 hold the rounded form of a 64-bit id
+      // (…597000 instead of …597128), because JSON.parse turned it into a double.
+      // Accepting the rounded form lets those still resolve while they age out; the
+      // ids are exact from 1.0.6 on.
+      const rounded = String(Number(key))
+      if (rounded !== key) {
+        const legacy = quoteCache.get(rounded)
+        if (legacy) {
+          entry = legacy
+          matched = rounded
+        }
+      }
+    }
     if (!entry) return ''
+
     if (Date.now() - entry.at > QUOTE_RETENTION_MS) {
-      quoteCache.delete(key)
+      quoteCache.delete(matched)
       quoteDirty = true
       scheduleQuoteFlush()
       return ''
@@ -1088,22 +1105,19 @@ export function createChannel(options) {
     // is anything to deliver.
     if (!text && mediaItems.length === 0) return
 
-    // Which ids this message actually carries. Temporary: the quote payload names a
-    // message by an id the bot has never seen a field for, so the raw shapes have to be
-    // compared rather than guessed at.
+    // Which ids a quote names, and what this message carries. Kept until the fix is
+    // confirmed: the quoted id and the cached key have to be compared, not guessed at.
     {
-      const ids = [
-        `mid=${String(message.message_id || '')}`,
-        `seq=${String(message.seq ?? '')}`,
-        `cid=${String(message.client_id || '')}`,
-        `sid=${String(message.session_id || '')}`,
-        `run=${String(message.run_id || '')}`,
-      ].join(' ')
-      note('ids', ids)
       const holder = (Array.isArray(message.item_list) ? message.item_list : []).find(
         (item) => item && typeof item === 'object' && item.ref_msg,
       )
-      if (holder) note('ref', JSON.stringify(holder.ref_msg).slice(0, 400))
+      if (holder) {
+        note(
+          'ids',
+          `mid=${String(message.message_id || '')} seq=${String(message.seq ?? '')} cid=${String(message.client_id || '')}`,
+        )
+        note('ref', JSON.stringify(holder.ref_msg).slice(0, 400))
+      }
     }
 
     // Every message the bot has seen becomes quotable context: the current WeChat

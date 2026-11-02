@@ -46,6 +46,27 @@ function newClientId() {
 }
 
 /**
+ * Parse a gateway response without rounding its 64-bit ids.
+ *
+ * `message_id`, `msg_id` and `svr_id` are uint64 on the wire. `JSON.parse` turns a
+ * numeric literal into a double, so 7522876884340597128 arrives as 7522876884340597000 —
+ * the trailing digits are gone before any code sees them. That is not cosmetic: a quote
+ * names the quoted message by the exact id, so a rounded key can never match it, and the
+ * lookup fails while looking perfectly reasonable.
+ *
+ * The raw text is therefore rewritten to quote any long integer under those keys before
+ * parsing, which is what "parsed losslessly as a string" means in the protocol notes.
+ * Sixteen digits is the threshold: real ids are 19, timestamps are 13.
+ */
+export function parseGatewayJson(raw) {
+  const guarded = String(raw).replace(
+    /("(?:message_id|msg_id|svr_id|server_id|msgid)"\s*:\s*)(\d{16,})/g,
+    '$1"$2"',
+  )
+  return JSON.parse(guarded)
+}
+
+/**
  * Long-poll for new messages.
  *
  * `get_updates_buf` is a server-issued cursor. Sending the previous value is what
@@ -66,7 +87,7 @@ export async function getUpdates({ baseUrl, token, syncBuffer, timeoutMs = 35_00
     signal,
     label: 'getupdates',
   })
-  return JSON.parse(raw)
+  return parseGatewayJson(raw)
 }
 
 /** Send one `MessageItem` and echo the conversation's context token. */
@@ -91,7 +112,9 @@ export async function sendItem({ baseUrl, token, toUserId, item, contextToken, s
       signal,
       label: 'sendmessage',
     })
-    const parsed = JSON.parse(raw)
+    // Parsed the same way as getupdates: the id this returns is what a later quote of
+    // our own message will name, so it has to be exact too.
+    const parsed = parseGatewayJson(raw)
     if (parsed.ret && parsed.ret !== 0) {
       throw new Error(`sendmessage ret=${parsed.ret} errmsg=${parsed.errmsg || '(none)'}`)
     }
