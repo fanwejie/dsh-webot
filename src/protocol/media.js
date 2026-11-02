@@ -38,6 +38,93 @@ export function buildDownloadUrl({ encryptQueryParam, fullUrl, cdnBaseUrl }) {
 }
 
 /**
+ * Refuse a download URL that does not point at a public HTTPS host.
+ *
+ * `full_url` comes from the gateway response and is used verbatim, so without this the
+ * plugin will fetch whatever address an upstream payload names — including
+ * `http://127.0.0.1:…` or a private-range IP, which is the shape of an SSRF. Tencent's
+ * CDN is always HTTPS, so requiring HTTPS costs nothing. Private, loopback and
+ * link-local literals are refused outright; any other public host is allowed, because
+ * the CDN hostname is not contractual and a hard allowlist would break downloads
+ * silently the day it changes. A host outside the WeChat domains is logged once rather
+ * than blocked.
+ *
+ * @throws when the URL is not something this plugin should be fetching.
+ */
+export function assertSafeMediaUrl(rawUrl, label = 'CDN') {
+  let url
+  try {
+    url = new URL(String(rawUrl || ''))
+  } catch {
+    throw new Error(`${label}: 下载地址不是合法 URL`)
+  }
+  if (url.protocol !== 'https:') {
+    throw new Error(`${label}: 下载地址必须是 https，收到 ${url.protocol}//${url.host}`)
+  }
+  const host = url.hostname.toLowerCase()
+  const isIpLiteral = /^\[?[0-9a-f:.]+\]?$/.test(host)
+  if (isIpLiteral) {
+    const isLoopbackOrPrivate =
+      /^(127\.|10\.|192\.168\.|169\.254\.|0\.)/.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      host === '::1' ||
+      host === '[::1]' ||
+      /^fe80:/i.test(host) ||
+      /^fc|^fd/i.test(host)
+    if (isLoopbackOrPrivate) {
+      throw new Error(`${label}: 下载地址指向内网/本机地址 ${host}，已拒绝`)
+    }
+  }
+  return url.toString()
+}
+
+/** How long one media download may take, independent of the surrounding turn. */
+const MEDIA_FETCH_TIMEOUT_MS = 60_000
+
+/**
+ * Read a response body with a hard byte ceiling, without materialising a huge buffer
+ * first.
+ *
+ * `content-length` is advisory: a server may omit it or lie, and `arrayBuffer()` reads
+ * whatever arrives. A 30 MB ceiling checked after the read is therefore not a ceiling at
+ * all — the memory is already spent. This reads in chunks and aborts the moment the
+ * running total passes the limit.
+ */
+async function readWithLimit(response, limitBytes, label) {
+  const declared = Number(response.headers.get('content-length') || 0)
+  if (declared > limitBytes) {
+    throw new Error(`${label}: 文件过大（${declared} 字节），已跳过`)
+  }
+  if (!response.body || typeof response.body.getReader !== 'function') {
+    // Older runtimes and some test doubles have no stream; fall back to the whole-body
+    // read, still checking the size afterwards.
+    const buffer = Buffer.from(await response.arrayBuffer())
+    if (buffer.length > limitBytes) {
+      throw new Error(`${label}: 文件过大（${buffer.length} 字节），已跳过`)
+    }
+    return buffer
+  }
+  const reader = response.body.getReader()
+  const chunks = []
+  let total = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.length
+      if (total > limitBytes) {
+        await reader.cancel().catch(() => {})
+        throw new Error(`${label}: 文件过大（超过 ${limitBytes} 字节），已中断下载`)
+      }
+      chunks.push(Buffer.from(value))
+    }
+  } finally {
+    reader.releaseLock()
+  }
+  return Buffer.concat(chunks, total)
+}
+
+/**
  * Turn one `aes_key` value into the raw 16-byte key.
  *
  * @throws when the value is neither shape, rather than silently using a bad key.
@@ -78,22 +165,24 @@ function decryptEcb(ciphertext, key) {
  * `aeskey`/`aes_key` needs.
  */
 export async function downloadMedia({ encryptQueryParam, aesKeyBase64, fullUrl, cdnBaseUrl, signal, label }) {
-  const url = buildDownloadUrl({ encryptQueryParam, fullUrl, cdnBaseUrl })
+  const url = assertSafeMediaUrl(
+    buildDownloadUrl({ encryptQueryParam, fullUrl, cdnBaseUrl }),
+    label || 'CDN',
+  )
 
-  const response = await fetch(url, signal ? { signal } : undefined)
+  const timeout = AbortSignal.timeout
+    ? AbortSignal.timeout(MEDIA_FETCH_TIMEOUT_MS)
+    : undefined
+  const combined =
+    signal && timeout && AbortSignal.any ? AbortSignal.any([signal, timeout]) : signal || timeout
+
+  const response = await fetch(url, combined ? { signal: combined } : undefined)
   if (!response.ok) {
     const body = await response.text().catch(() => '')
     throw new Error(`${label}: CDN 下载失败 HTTP ${response.status} ${body.slice(0, 200)}`)
   }
 
-  const declared = Number(response.headers.get('content-length') || 0)
-  if (declared > MAX_MEDIA_BYTES) {
-    throw new Error(`${label}: 文件过大（${declared} 字节），已跳过`)
-  }
-  const encrypted = Buffer.from(await response.arrayBuffer())
-  if (encrypted.length > MAX_MEDIA_BYTES) {
-    throw new Error(`${label}: 文件过大（${encrypted.length} 字节），已跳过`)
-  }
+  const encrypted = await readWithLimit(response, MAX_MEDIA_BYTES, label)
 
   if (!aesKeyBase64) return encrypted
   return decryptEcb(encrypted, parseAesKey(aesKeyBase64))

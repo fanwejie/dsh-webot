@@ -667,6 +667,17 @@ export function createChannel(options) {
     return false
   }
 
+  /**
+   * Release a message id so it may be processed again.
+   *
+   * Used only when processing threw: the duplicate guard exists to stop the gateway
+   * replaying a message, not to make a failed one permanent.
+   */
+  function forget(messageId) {
+    const key = String(messageId || '')
+    if (key) seen.delete(key)
+  }
+
   /** A media-only message has no text, but it is still quotable as "[图片]". */
   function labelOfMessage(message) {
     const items = mediaItemsOf(message)
@@ -1641,7 +1652,31 @@ export function createChannel(options) {
     lines.push('', '回复 1 允许一次 · 2 拒绝 · 3 取消')
 
     const wait = beginWait(pendingApprovals, key, request.signal, 'cancelled')
-    await sendReply(target.accountId, target.toUserId, target.contextToken, lines.join('\n'))
+    let delivered = false
+    try {
+      delivered = await sendReply(
+        target.accountId,
+        target.toUserId,
+        target.contextToken,
+        lines.join('\n'),
+      )
+    } catch (error) {
+      // The prompt never reached the phone. Finish the wait before letting the error
+      // through: the entry is registered in `pendingApprovals` from the moment it is
+      // created, and an entry nobody can answer blocks this conversation — every later
+      // approval is delegated with "another prompt is already open".
+      wait.finish('cancelled')
+      throw error
+    }
+    if (!delivered) {
+      // sendReply reports a failed send by returning false, not by throwing. Waiting
+      // anyway would block the agent turn for the whole timeout on a prompt that is not
+      // on any phone, and then auto-reject it: the worst of both. Delegate instead, so
+      // the desk still gets a prompt and the turn is not held hostage.
+      wait.finish('cancelled')
+      note('approval', 'not delivered, delegated | send failed')
+      return next()
+    }
 
     // Claimed outright, so the desktop answerer is never started. Racing it and
     // losing would leave the browser holding a dialog that only that answerer
@@ -1775,7 +1810,27 @@ export function createChannel(options) {
     )
 
     const wait = beginWait(pendingQuestions, key, request.signal, emptyQuestionAnswer(item), { item })
-    await sendReply(target.accountId, target.toUserId, target.contextToken, lines.join('\n'))
+    let delivered = false
+    try {
+      delivered = await sendReply(
+        target.accountId,
+        target.toUserId,
+        target.contextToken,
+        lines.join('\n'),
+      )
+    } catch (error) {
+      // Same reasoning as approvals: a registered wait that never reached the phone
+      // would make this conversation look busy to every later question.
+      wait.finish(emptyQuestionAnswer(item))
+      throw error
+    }
+    if (!delivered) {
+      // The question never reached the phone; asking the desk instead of waiting for an
+      // answer that cannot arrive.
+      wait.finish(emptyQuestionAnswer(item))
+      note('question', 'not delivered, delegated | send failed')
+      return next()
+    }
 
     const answer = await wait.promise
     const first = answer.answers && answer.answers[0]
@@ -2106,7 +2161,27 @@ export function createChannel(options) {
           await handleInbound(account, message, signal)
         } catch (error) {
           if (signal.aborted) break
-          recordError(account.accountId, error)
+          // The cursor for this batch was already persisted, so a message that fails
+          // here would otherwise never be fetched again. One retry, with the duplicate
+          // guard released, covers the common transient cause (a CDN fetch, a state
+          // write). A failure that survives it is logged with the message id, because a
+          // silently dropped message is the one outcome nobody can notice.
+          const shortId = String((message && message.message_id) || '').slice(-12)
+          forget(message && message.message_id)
+          try {
+            await sleep(500, signal)
+            await handleInbound(account, message, signal)
+            note('inbound', `retry ok | ${shortId}`)
+          } catch (retryError) {
+            if (signal.aborted) break
+            note(
+              'inbound',
+              `failed after retry | ${shortId} | ${String(
+                (retryError && retryError.message) || retryError,
+              ).slice(0, 200)}`,
+            )
+            recordError(account.accountId, retryError)
+          }
         }
       }
     }

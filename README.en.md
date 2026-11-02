@@ -717,6 +717,40 @@ Without that first line a failed send left no trace at all, which is exactly why
 Package name, patch row id and the `client.js` module id must stay equal
 (`dsh-webot`); the plugin manager and the client module loader both key on it.
 
+## What a download and a send are allowed to do
+
+**A download URL is checked.** The media address comes from `full_url` in the gateway
+response and used to be fetched verbatim. It now has to be:
+
+- **https**;
+- not a loopback, private or link-local address (`127.`, `10.`, `192.168.`, `172.16–31.`,
+  `169.254.`, `0.`, `::1`, `fe80::`, `fc00::/7`) — refused outright;
+- any other public host — allowed, because the CDN hostname is not contractual and a hard
+  allowlist would break downloads the day it changes.
+
+**The size ceiling is a real ceiling.** The old order read `content-length`, then pulled
+the whole body into memory with `arrayBuffer()`, then compared against 30 MB — with an
+absent or lying header the memory was already spent. The body is now read in chunks and
+the stream cancelled the moment the running total passes the limit, with a 60 s timeout
+per download.
+
+**Sending a file allows an absolute path, on purpose.** The agent may send any file on
+this machine to the bound WeChat account — that is what makes "send me that PDF on the
+desktop" work. It grants no extra privilege: an agent that can read that file can already
+open it with its own file tools. The real boundary is DSH's tool permissions and sandbox
+policy, not this plugin. Every send logs `send-media target=… path=…` so it can be
+audited afterwards.
+
+## Tests
+
+```bash
+npm test
+```
+
+Covers quote resolution (full / partial / picture / voice / cleared), 64-bit id
+precision, the download URL guard, the streaming size cap, and that a failed approval
+notification leaves no pending wait behind.
+
 ## The protocol layer
 
 Written against `@tencent-weixin/openclaw-weixin@2.4.10` (MIT, published by Tencent),
