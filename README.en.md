@@ -546,15 +546,36 @@ The quoted body comes from, in order:
 | `ref.message_item` | The client sent the whole quoted message — the common case |
 | `partial_text` | The user selected a fragment: located by **nth occurrence** of the boundary strings, verified against `quotemd5` |
 | `ref.title` | The client only sent a summary |
+| the local message cache | When there is only `svr_id` — **which is what the current client sends** |
 
 ⚠️ The trap: `startindex` / `endindex` in `partial_text` are **occurrence numbers, not
 character offsets**. Treating them as offsets returns the whole message — it looks like
 it works, but the selection is wrong.
 
-With only `svr_id` (the content was not sent along), the prefix says so —
-`[引用消息] （内容没随回复发来，引用 id …）` — instead of inventing content. The upstream
-client resolves that id against a local cache; this plugin keeps no such cache, so it
-states the fact.
+### The message cache keeps seven days
+
+When only an id arrives, the body can come from nowhere but a local cache. Each message
+is kept for **seven days**, then deleted:
+
+- swept at startup, hourly while running, and on read when an entry has aged out;
+- deleted for real: gone from memory, and gone from `state.json` because the whole file
+  is rewritten — no "expired" marker, no placeholder row. The log records ids and
+  counts, never content;
+- capped at 1000 entries as a backstop; retention, not the cap, is the real limit.
+
+A quote of something cleared reaches the agent as one line:
+
+```
+[引用消息] （这条被引用的内容已被清除）
+```
+
+No id, no guess — all it needs to know is that this text is not available, so it should
+ask rather than invent.
+
+**What this does not reach**, stated plainly: if the quoted message was ever delivered to
+the agent as part of a prompt, it lives in that session's transcript, which belongs to
+DSH's session management and is outside this plugin's cleanup. Deleting a session is the
+way to remove that.
 
 **Commands are unaffected**: `/list`, `/switch` and friends still parse from what you
 typed, because the quote only enters the prompt.

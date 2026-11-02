@@ -30,6 +30,9 @@ import { ANCHOR_REMINDER, DEFAULT_CHANNEL_PROMPT, MAX_ANCHOR_CHARS, MAX_PROMPT_C
 const STATE_VERSION = 1
 const MAX_ACCOUNTS = 5
 
+/** Upper bound on stored message bodies; retention, not this, is the real limit. */
+const MAX_QUOTE_ENTRIES = 1000
+
 /** Merge window bounds: zero disables waiting, and the cap keeps it a window. */
 const DEFAULT_MEDIA_MERGE_SEC = 20
 const MAX_MEDIA_MERGE_SEC = 300
@@ -236,17 +239,20 @@ export function normalizeState(raw) {
 
   // Recent message bodies, so a quote that arrives as an id alone can be resolved.
   //
-  // Stored as [id, body] pairs in arrival order. This has to survive a restart: the
+  // Stored as [id, body, keptAt] in arrival order. This has to survive a restart: the
   // quotes people send are almost always of older messages, and an in-memory-only
-  // cache is empty exactly when it is needed.
+  // cache is empty exactly when it is needed. `keptAt` is what makes the retention
+  // window enforceable across restarts; nothing outlives it.
   const quoteCache = []
   if (Array.isArray(source.quoteCache)) {
     for (const entry of source.quoteCache) {
-      if (!Array.isArray(entry) || entry.length !== 2) continue
+      if (!Array.isArray(entry) || entry.length < 2) continue
       const id = typeof entry[0] === 'number' ? String(entry[0]) : text(entry[0], 128)
       const body = text(entry[1], 4096)
       if (!id || !body) continue
-      quoteCache.push([id, body])
+      const keptAt = Number(entry[2])
+      quoteCache.push([id, body, Number.isFinite(keptAt) && keptAt > 0 ? keptAt : Date.now()])
+      if (quoteCache.length >= MAX_QUOTE_ENTRIES) break
     }
   }
 

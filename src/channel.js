@@ -49,7 +49,19 @@ const SEEN_LIMIT = 500
  * The current WeChat client sends a quote as an id with no content, so this cache is
  * the only source of the quoted text. Sized for a long conversation on one phone.
  */
-const QUOTE_CACHE_LIMIT = 300
+const QUOTE_CACHE_LIMIT = 1000
+
+/**
+ * How long a message body is kept so it can be quoted.
+ *
+ * Seven days, then it is gone — not marked expired, deleted, from memory and from the
+ * state file both. A quote that lands after that resolves to nothing and is reported
+ * to the agent as cleared.
+ */
+const QUOTE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000
+
+/** How often the retention sweep runs while the channel is up. */
+const QUOTE_PRUNE_INTERVAL_MS = 60 * 60 * 1000
 
 /** Abortable sleep. */
 function sleep(ms, signal) {
@@ -179,9 +191,11 @@ function quoteRefId(message) {
  *   ref.partial_text — the fragment the user selected, when they quoted only part;
  *   ref.title        — a short summary, which is all some clients send;
  *   lookup(svr_id)   — the message cache, because the current WeChat client sends only
- *                      an id. Without this the quoting user sees "内容没随回复发来".
+ *                      an id, and the body has to be one that went past before.
  *
- * A quote id that resolves to nothing says so instead of inventing content.
+ * Nothing is invented when the id resolves to nothing. The agent is told the quoted
+ * content has been cleared, which is true whether it aged out or was never kept, and
+ * is the one thing it needs to know in order to ask instead of guessing.
  */
 export function quotedOf(message, lookup) {
   const items = Array.isArray(message.item_list) ? message.item_list : []
@@ -208,7 +222,9 @@ export function quotedOf(message, lookup) {
 
   const content = selected || body || summary || cached
   if (!content) {
-    return id ? `[引用消息] （内容没随回复发来，引用 id ${id}）` : '[引用消息] （内容没随回复发来）'
+    // The id stays out of the prompt: it means nothing to the agent, and the point of
+    // the message is only that this content is gone.
+    return '[引用消息] （这条被引用的内容已被清除）'
   }
   return `[引用消息] ${content}`
 }
@@ -647,11 +663,30 @@ export function createChannel(options) {
   /** Pending timer for the coalesced cache write, and whether one is owed. */
   let quoteFlushTimer = null
   let quoteDirty = false
+  let quotePruneTimer = null
 
-  // Hydrate from disk: the quotes people send are almost always of older messages, so
-  // a cache that only lives in memory is empty exactly when it is needed.
-  for (const entry of readState().quoteCache || []) {
-    if (Array.isArray(entry) && entry.length === 2) quoteCache.set(String(entry[0]), String(entry[1]))
+  // Hydrate from disk, dropping anything past its retention on the way in. A message
+  // older than the window is not kept anywhere: no body, no tombstone, no "was here"
+  // marker — a quote of it simply finds nothing.
+  {
+    let dropped = 0
+    for (const entry of readState().quoteCache || []) {
+      if (!Array.isArray(entry) || entry.length < 2) continue
+      const id = String(entry[0] ?? '').trim()
+      const body = String(entry[1] ?? '')
+      const at = Number(entry[2]) || 0
+      if (!id || !body) continue
+      if (at && Date.now() - at > QUOTE_RETENTION_MS) {
+        dropped += 1
+        continue
+      }
+      quoteCache.set(id, { body, at: at || Date.now() })
+    }
+    if (dropped > 0) {
+      quoteDirty = true
+      scheduleQuoteFlush()
+      note('quote', `dropped ${dropped} expired on load`)
+    }
   }
 
   /** Coalesced write of the cache; per-message writes would rewrite the file constantly. */
@@ -672,17 +707,65 @@ export function createChannel(options) {
     if (!quoteDirty) return
     quoteDirty = false
     try {
-      updateState({ quoteCache: [...quoteCache.entries()] })
+      // The whole file is rewritten, so an expired body is not left behind in it.
+      updateState({
+        quoteCache: [...quoteCache.entries()].map(([id, entry]) => [id, entry.body, entry.at]),
+      })
     } catch {
       /* the cache is an optimisation; a failed write must not break delivery */
     }
   }
 
+  /**
+   * Forget everything past its retention.
+   *
+   * Called hourly and on every read, because a long-running process would otherwise
+   * hold a message for as long as it stays up, whatever the window says.
+   */
+  function pruneQuoteCache(now = Date.now()) {
+    const cutoff = now - QUOTE_RETENTION_MS
+    let removed = 0
+    for (const [id, entry] of quoteCache) {
+      if (entry.at <= cutoff) {
+        quoteCache.delete(id)
+        removed += 1
+      }
+    }
+    if (removed > 0) {
+      quoteDirty = true
+      scheduleQuoteFlush()
+      note('quote', `pruned ${removed} expired`)
+    }
+    return removed
+  }
+
+  /** The body behind a quoted id, or '' when it was never seen or is past retention. */
+  function lookupQuote(id) {
+    const key = String(id || '').trim()
+    if (!key) return ''
+    const entry = quoteCache.get(key)
+    if (!entry) return ''
+    if (Date.now() - entry.at > QUOTE_RETENTION_MS) {
+      quoteCache.delete(key)
+      quoteDirty = true
+      scheduleQuoteFlush()
+      return ''
+    }
+    return entry.body
+  }
+
   function rememberQuote(id, body) {
     const key = String(id || '').trim()
     if (!key || !body) return
-    if (quoteCache.get(key) === body) return
-    quoteCache.set(key, body)
+    const existing = quoteCache.get(key)
+    if (existing && existing.body === body) {
+      // Refresh the timestamp: the same message seen again restarts its window.
+      existing.at = Date.now()
+      quoteDirty = true
+      scheduleQuoteFlush()
+      return
+    }
+    quoteCache.set(key, { body, at: Date.now() })
     if (quoteCache.size > QUOTE_CACHE_LIMIT) {
       const oldest = quoteCache.keys().next().value
       quoteCache.delete(oldest)
@@ -1014,25 +1097,18 @@ export function createChannel(options) {
     // A quote reply puts the quoted message in a separate item. Keeping it out of
     // `text` means commands and approval answers still parse on the raw words, while
     // the prompt gets the context: "这个改成红色" alone tells the agent nothing.
-    const quoted = quotedOf(message, (id) => quoteCache.get(id) || '')
+    const quoted = quotedOf(message, lookupQuote)
     const promptText = quoted ? (text ? `${quoted}\n\n${text}` : quoted) : text
 
     const quoteId = quoteRefId(message)
     if (quoteId) {
-      if (quoteCache.has(quoteId)) {
+      if (lookupQuote(quoteId)) {
         note('quote', `hit | ${quoteId.slice(-12)} | cached=${quoteCache.size}`)
       } else {
-        // Logged so a quote that still cannot be resolved leaves a trail. The reference
-        // id and the ids already cached are printed truncated, which is enough to tell
-        // whether the two are the same kind of id at all.
-        const last = [...quoteCache.keys()]
-          .slice(-3)
-          .map((key) => key.slice(-12))
-          .join(',')
-        note(
-          'quote',
-          `miss | ref=${quoteId.slice(-12)} | cached=${quoteCache.size} | last=${last || '-'}`,
-        )
+        // An id with nothing behind it is either a message past its retention or one
+        // that never went past. Either way the agent was told it was cleared; logging
+        // the id here is what made this diagnosable, and it is the id, not the content.
+        note('quote', `cleared | ${quoteId.slice(-12)} | cached=${quoteCache.size}`)
       }
     }
 
@@ -1908,6 +1984,13 @@ export function createChannel(options) {
 
   function startAll() {
     for (const account of readState().accounts) startAccount(account)
+    // Retention has to run while the process is up: a message that ages out during a
+    // long session must be deleted then, not at the next restart.
+    pruneQuoteCache()
+    if (!quotePruneTimer) {
+      quotePruneTimer = setInterval(() => pruneQuoteCache(), QUOTE_PRUNE_INTERVAL_MS)
+      if (typeof quotePruneTimer.unref === 'function') quotePruneTimer.unref()
+    }
   }
 
   function stopAccount(accountId) {
@@ -1919,6 +2002,10 @@ export function createChannel(options) {
 
   function stopAll() {
     // The quote cache is written on a timer; unloading must not drop the last batch.
+    if (quotePruneTimer) {
+      clearInterval(quotePruneTimer)
+      quotePruneTimer = null
+    }
     flushQuoteCache()
     for (const accountId of [...loops.keys()]) stopAccount(accountId)
     for (const timer of settleTimers.values()) clearTimeout(timer)
