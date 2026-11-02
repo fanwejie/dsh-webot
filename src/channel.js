@@ -43,6 +43,14 @@ const RETRY_MS = 1500
 /** How many inbound message ids to remember for duplicate suppression. */
 const SEEN_LIMIT = 500
 
+/**
+ * How many message bodies to keep for resolving quotes.
+ *
+ * The current WeChat client sends a quote as an id with no content, so this cache is
+ * the only source of the quoted text. Sized for a long conversation on one phone.
+ */
+const QUOTE_CACHE_LIMIT = 300
+
 /** Abortable sleep. */
 function sleep(ms, signal) {
   return new Promise((resolve) => {
@@ -142,20 +150,40 @@ function resolvePartial(fullText, partial) {
 }
 
 /**
+ * The id a quote reply points at, when the client sent no content of its own.
+ *
+ * `ref.svr_id` is the server id of the quoted message; older clients also inline the
+ * message itself, in which case the id is on `ref.message_item.msg_id`.
+ */
+function quoteRefId(message) {
+  const items = Array.isArray(message.item_list) ? message.item_list : []
+  const holder = items.find((item) => item && typeof item === 'object' && item.ref_msg)
+  const ref = holder && holder.ref_msg
+  if (!ref || typeof ref !== 'object') return ''
+  const svr = typeof ref.svr_id === 'string' ? ref.svr_id.trim() : ''
+  if (svr) return svr
+  return ref.message_item && typeof ref.message_item.msg_id === 'string'
+    ? ref.message_item.msg_id.trim()
+    : ''
+}
+
+/**
  * The message being replied to, rendered as a prefix for the prompt.
  *
  * WeChat sends a quote reply as an extra item carrying `ref_msg`, not as text inside
  * the reply. Reading only the text item is why a quoted message looked invisible:
  * the agent received "这个改成红色" with no idea what 这个 was.
  *
- * The quoted body can come from three places, in order of usefulness:
+ * The quoted body can come from four places, in order of usefulness:
  *   ref.message_item — the whole quoted message, when the client sends it;
  *   ref.partial_text — the fragment the user selected, when they quoted only part;
- *   ref.title        — a short summary, which is all some clients send.
- * `ref.svr_id` alone means the content was not sent with the reply; there is nothing
- * local to resolve it against, so that case says so instead of inventing content.
+ *   ref.title        — a short summary, which is all some clients send;
+ *   lookup(svr_id)   — the message cache, because the current WeChat client sends only
+ *                      an id. Without this the quoting user sees "内容没随回复发来".
+ *
+ * A quote id that resolves to nothing says so instead of inventing content.
  */
-export function quotedOf(message) {
+export function quotedOf(message, lookup) {
   const items = Array.isArray(message.item_list) ? message.item_list : []
   const holder = items.find((item) => item && typeof item === 'object' && item.ref_msg)
   const ref = holder && holder.ref_msg
@@ -168,9 +196,18 @@ export function quotedOf(message) {
 
   const selected = resolvePartial(body, ref.partial_text).trim()
 
-  const content = selected || body || summary
+  const id = quoteRefId(message)
+  let cached = ''
+  if (typeof lookup === 'function' && id) {
+    try {
+      cached = String(lookup(id) || '').trim()
+    } catch {
+      cached = ''
+    }
+  }
+
+  const content = selected || body || summary || cached
   if (!content) {
-    const id = typeof ref.svr_id === 'string' ? ref.svr_id.trim() : ''
     return id ? `[引用消息] （内容没随回复发来，引用 id ${id}）` : '[引用消息] （内容没随回复发来）'
   }
   return `[引用消息] ${content}`
@@ -587,6 +624,52 @@ export function createChannel(options) {
     return false
   }
 
+  /** A media-only message has no text, but it is still quotable as "[图片]". */
+  function labelOfMessage(message) {
+    const items = mediaItemsOf(message)
+    if (items.length === 0) return ''
+    return labelOfItem(items[0])
+  }
+
+  /**
+   * Recent message bodies, keyed by message id.
+   *
+   * A quote reply from the current WeChat client carries only `ref.svr_id` — the body
+   * is not in the payload, so the only way to show what was quoted is to have seen
+   * that message earlier. Bounded and in memory: a restart loses it, which costs the
+   * quoted text for quotes that cross a restart, nothing else.
+   */
+  const quoteCache = new Map()
+
+  /** Whether the one-shot "did the gateway return an id?" note has been written. */
+  let outboundAckLogged = false
+
+  function rememberQuote(id, body) {
+    const key = String(id || '').trim()
+    if (!key || !body) return
+    quoteCache.set(key, body)
+    if (quoteCache.size > QUOTE_CACHE_LIMIT) {
+      const oldest = quoteCache.keys().next().value
+      quoteCache.delete(oldest)
+    }
+  }
+
+  /** Remember an outbound message under whatever id the gateway returned for it. */
+  function cacheOutbound(result, body) {
+    if (!result || typeof result !== 'object') return
+    const id =
+      result.message_id || result.msg_id || result.msgid || result.svr_id || result.server_id || ''
+    if (id) {
+      rememberQuote(id, body)
+      return
+    }
+    // Once is enough to learn whether this gateway hands ids back at all.
+    if (!outboundAckLogged) {
+      outboundAckLogged = true
+      note('send-ack', `no id in response | keys=${Object.keys(result).join(',') || '(none)'}`)
+    }
+  }
+
   function persistCursor(accountId, cursor) {
     const state = readState()
     if (state.syncBufs[accountId] === cursor) return
@@ -664,13 +747,16 @@ export function createChannel(options) {
     for (let index = 0; index < list.length; index += 1) {
       const part = list[index]
       try {
-        await sendText({
+        const result = await sendText({
           baseUrl: account.baseUrl,
           token: account.token,
           toUserId,
           text: part,
           contextToken,
         })
+        // If the gateway hands back an id for our own message, remember it: the user
+        // quoting the bot's reply is the other half of quote replies.
+        cacheOutbound(result, part)
         note('send', `ok · ${part.length} chars${list.length > 1 ? ` (${index + 1}/${list.length})` : ''}`)
         clearError(account.accountId)
       } catch (error) {
@@ -862,8 +948,13 @@ export function createChannel(options) {
 
   async function handleInbound(account, message, signal) {
     if (!message || typeof message !== 'object') return
-    // BOT-typed entries are our own sends echoed back by the gateway.
-    if (message.message_type !== MESSAGE_TYPE_USER) return
+
+    // Our own sends come back through the same long poll. They are not delivered, but
+    // they are worth keeping: a user quoting the bot's reply carries only that id.
+    if (message.message_type !== MESSAGE_TYPE_USER) {
+      rememberQuote(message.message_id, textOf(message).trim() || labelOfMessage(message))
+      return
+    }
 
     const userId = String(message.from_user_id || '')
     if (!userId) return
@@ -874,13 +965,33 @@ export function createChannel(options) {
     // is anything to deliver.
     if (!text && mediaItems.length === 0) return
 
+    // Every message the bot has seen becomes quotable context: the current WeChat
+    // client sends a quote as an id with no content, so the body has to come from here.
+    const messageId = String(message.message_id || '')
+    rememberQuote(messageId, text || labelOfMessage(message))
+    // `svr_id` may also be the sequence number, so both are kept as keys.
+    if (message.seq !== undefined && message.seq !== null) {
+      rememberQuote(message.seq, text || labelOfMessage(message))
+    }
+
     // A quote reply puts the quoted message in a separate item. Keeping it out of
     // `text` means commands and approval answers still parse on the raw words, while
     // the prompt gets the context: "这个改成红色" alone tells the agent nothing.
-    const quoted = quotedOf(message)
+    const quoted = quotedOf(message, (id) => quoteCache.get(id) || '')
     const promptText = quoted ? (text ? `${quoted}\n\n${text}` : quoted) : text
 
-    const messageId = String(message.message_id || '')
+    const quoteId = quoteRefId(message)
+    if (quoteId && !quoteCache.has(quoteId)) {
+      // Logged so a quote that still cannot be resolved leaves a trail. The reference
+      // id and the ids already cached are printed truncated, which is enough to tell
+      // whether the two are the same kind of id at all.
+      const last = [...quoteCache.keys()]
+        .slice(-3)
+        .map((key) => key.slice(-12))
+        .join(',')
+      note('quote', `miss | ref=${quoteId.slice(-12)} | cached=${quoteCache.size} | last=${last || '-'}`)
+    }
+
     if (remember(messageId)) return
     note(
       'inbound',
