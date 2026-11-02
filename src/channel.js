@@ -717,79 +717,210 @@ export function createChannel(options) {
   /** How many replays a failed message gets before it is abandoned. */
   const MAX_PENDING_ATTEMPTS = 3
 
+  /** How many failed messages may wait at once before the oldest is dropped. */
+  const PENDING_LIMIT = (() => {
+    const raw = Number(process.env.WEBOT_PENDING_LIMIT)
+    if (Number.isFinite(raw) && raw >= 1) return Math.min(Math.floor(raw), 200)
+    return 20
+  })()
+
+  /** How many delivered ids are remembered; matches the state-file cap. */
+  const DELIVERED_LIMIT = 200
+
+  /**
+   * Failed messages waiting for a replay, and how many were dropped to make room.
+   *
+   * Held in memory and written through, rather than rebuilt from the file on every call:
+   * a write that fails must not take the queued message with it. The write is retried
+   * until it succeeds, and the drop counter is what makes an overflow visible instead of
+   * silent.
+   */
+  const pendingQueue = []
+  let pendingDropped = 0
+  let pendingDirty = false
+  let pendingFlushTimer = null
+
+  // Loaded now rather than inside replay: the queue is the source of truth for what is
+  // still owed a delivery, so it must be visible (and counted) from the first moment.
+  for (const entry of readState().pendingInbound || []) {
+    if (!entry || typeof entry !== 'object') continue
+    const id = String(entry.message?.message_id || '')
+    if (!id || pendingQueue.some((queued) => String(queued.message?.message_id || '') === id)) {
+      continue
+    }
+    pendingQueue.push(entry)
+  }
+  // A state file written by an older version, or edited by hand, can hold more than the
+  // cap. Dropping the excess is allowed; dropping it silently is not.
+  while (pendingQueue.length > PENDING_LIMIT) {
+    const dropped = pendingQueue.shift()
+    pendingDropped += 1
+    note(
+      'inbound',
+      `pending queue over limit (${PENDING_LIMIT}) on load | dropped ${String(
+        dropped.message?.message_id || '',
+      ).slice(-12)}`,
+    )
+  }
+
+  /**
+   * Message ids whose content already reached a session.
+   *
+   * The side effect of a message is submitting a prompt. If something throws after that,
+   * the message is queued and replayed — and without this set the replay would run the
+   * same turn a second time.
+   */
+  const deliveredIds = new Set(readState().deliveredInbound || [])
+
+  /** Record ids that have been delivered, for replay idempotency. */
+  function markDelivered(ids) {
+    const list = (Array.isArray(ids) ? ids : [ids]).map((id) => String(id || '')).filter(Boolean)
+    if (list.length === 0) return
+    let changed = false
+    for (const id of list) {
+      if (!deliveredIds.has(id)) {
+        deliveredIds.add(id)
+        changed = true
+      }
+    }
+    if (!changed) return
+    while (deliveredIds.size > DELIVERED_LIMIT) {
+      const oldest = deliveredIds.values().next().value
+      deliveredIds.delete(oldest)
+    }
+    try {
+      updateState({ deliveredInbound: [...deliveredIds] })
+    } catch (error) {
+      // The in-memory set still protects this process; only a restart could replay.
+      note('inbound', `delivered marker not persisted | ${String((error && error.message) || error).slice(0, 120)}`)
+    }
+  }
+
+  /** Whether this message already reached a session. */
+  function isDelivered(messageId) {
+    return deliveredIds.has(String(messageId || ''))
+  }
+
+  function flushPendingQueue() {
+    if (pendingFlushTimer) {
+      clearTimeout(pendingFlushTimer)
+      pendingFlushTimer = null
+    }
+    if (!pendingDirty) return
+    try {
+      updateState({ pendingInbound: pendingQueue })
+      pendingDirty = false
+    } catch (error) {
+      // Loud, and retried: the message is still in memory, so a later flush can save it.
+      note(
+        'inbound',
+        `pending write failed | ${String((error && error.message) || error).slice(0, 120)} | will retry`,
+      )
+      schedulePendingFlush()
+    }
+  }
+
+  function schedulePendingFlush() {
+    if (pendingFlushTimer) return
+    pendingFlushTimer = setTimeout(flushPendingQueue, 2000)
+    if (typeof pendingFlushTimer.unref === 'function') pendingFlushTimer.unref()
+  }
+
   /**
    * Keep a message that failed twice, so the next start can try it again.
    *
    * The poll cursor has already moved past it, so the gateway will never resend it.
-   * Replay is at-least-once: a message that threw after delivery may be delivered
-   * again, which is the trade taken over losing it silently.
+   * Replay is at-least-once for messages that never reached a session, and the
+   * delivered-id set keeps it from running one twice.
    */
   function queuePendingInbound(accountId, userId, message) {
     const id = String((message && message.message_id) || '')
     if (!id) return
-    const state = readState()
-    const list = Array.isArray(state.pendingInbound) ? [...state.pendingInbound] : []
-    const index = list.findIndex((entry) => String(entry.message?.message_id || '') === id)
-    const previous = index >= 0 ? Number(list[index].attempts) || 0 : 0
+    const index = pendingQueue.findIndex(
+      (entry) => String(entry.message?.message_id || '') === id,
+    )
+    const previous = index >= 0 ? Number(pendingQueue[index].attempts) || 0 : 0
     const record = { accountId, userId, message, at: Date.now(), attempts: previous + 1 }
-    if (index >= 0) list[index] = record
-    else list.push(record)
-    // Oldest first out, so a burst of failures cannot grow without bound.
-    while (list.length > 20) list.shift()
-    try {
-      updateState({ pendingInbound: list })
-    } catch {
-      /* a failed write must not cascade into another failure */
+    if (index >= 0) {
+      pendingQueue[index] = record
+    } else {
+      pendingQueue.push(record)
     }
+    // Oldest first out. Dropping is always logged: a queue that silently loses messages
+    // is worse than one that says which message it could not hold.
+    while (pendingQueue.length > PENDING_LIMIT) {
+      const dropped = pendingQueue.shift()
+      pendingDropped += 1
+      note(
+        'inbound',
+        `pending queue full (${PENDING_LIMIT}) | dropped ${String(dropped.message?.message_id || '').slice(-12)}`,
+      )
+    }
+    pendingDirty = true
+    flushPendingQueue()
   }
 
   function dropPendingInbound(messageId) {
     const id = String(messageId || '')
     if (!id) return
-    const state = readState()
-    const list = Array.isArray(state.pendingInbound) ? state.pendingInbound : []
-    const next = list.filter((entry) => String(entry.message?.message_id || '') !== id)
-    if (next.length === list.length) return
-    try {
-      updateState({ pendingInbound: next })
-    } catch {
-      /* ignore */
-    }
+    const index = pendingQueue.findIndex((entry) => String(entry.message?.message_id || '') === id)
+    if (index < 0) return
+    pendingQueue.splice(index, 1)
+    pendingDirty = true
+    flushPendingQueue()
   }
 
   /**
    * Try the messages that failed last time.
    *
-   * Runs once at start, before polling resumes. Ids are released from the duplicate
-   * guard first, because they were registered before the failure.
+   * Runs once at start, before polling resumes. A message whose content already reached a
+   * session is dropped rather than replayed: that is the idempotency guard, and it is why
+   * a failure after delivery cannot run the same turn twice.
    */
   async function replayPendingInbound() {
-    const entries = readState().pendingInbound
-    if (!Array.isArray(entries) || entries.length === 0) return
+    // Anything the previous process left is already loaded; this covers a queue file that
+    // changed between construction and the first replay (a second channel object in the
+    // same process, for instance).
+    for (const entry of readState().pendingInbound || []) {
+      if (!entry || typeof entry !== 'object') continue
+      const id = String(entry.message?.message_id || '')
+      if (!id) continue
+      if (pendingQueue.some((queued) => String(queued.message?.message_id || '') === id)) continue
+      pendingQueue.push(entry)
+    }
+    if (pendingQueue.length === 0) return
+
     const accounts = new Map(readState().accounts.map((account) => [account.accountId, account]))
     let delivered = 0
-    for (const entry of entries) {
+    for (const entry of [...pendingQueue]) {
+      const id = String(entry.message?.message_id || '')
+      if (isDelivered(id)) {
+        note('inbound', `replay skipped, already delivered | ${id.slice(-12)}`)
+        dropPendingInbound(id)
+        continue
+      }
       const account = accounts.get(entry.accountId)
       if (!account) {
         // The account was removed; the message has nowhere to go.
-        dropPendingInbound(entry.message?.message_id)
+        note('inbound', `replay dropped, account gone | ${id.slice(-12)}`)
+        dropPendingInbound(id)
         continue
       }
-      forget(entry.message?.message_id)
+      forget(id)
       try {
         await handleInbound(account, entry.message, new AbortController().signal)
-        dropPendingInbound(entry.message?.message_id)
+        dropPendingInbound(id)
         delivered += 1
       } catch (error) {
         const attempts = (Number(entry.attempts) || 0) + 1
         if (attempts >= MAX_PENDING_ATTEMPTS) {
           note(
             'inbound',
-            `dropped after ${attempts} attempts | ${String(entry.message?.message_id || '').slice(-12)} | ${String(
+            `dropped after ${attempts} attempts | ${id.slice(-12)} | ${String(
               (error && error.message) || error,
             ).slice(0, 120)}`,
           )
-          dropPendingInbound(entry.message?.message_id)
+          dropPendingInbound(id)
         } else {
           queuePendingInbound(entry.accountId, entry.userId, entry.message)
         }
@@ -1462,7 +1593,7 @@ export function createChannel(options) {
     const held = contentBuffers.get(sessionKey)
     if (held) {
       // Text inside the window: the file and the request become one turn.
-      await deliverBuffered(sessionKey, promptText)
+      await deliverBuffered(sessionKey, promptText, messageId)
       return
     }
 
@@ -1568,6 +1699,10 @@ export function createChannel(options) {
       await sessionController.prompt({ ...request, mode: 'queue' }, promptSignal)
       note('prompt', 'queued')
     }
+    // Past this point the turn has been submitted — the side effect happened. Recording
+    // it is what makes a later failure replay-safe: the message may be queued again, but
+    // the replay will see it as delivered and drop it instead of running twice.
+    markDelivered([messageId, ...(mediaOwnerIds || [])])
     clearError(account.accountId)
   }
 
@@ -1646,8 +1781,13 @@ export function createChannel(options) {
     note('merge', `hold | ${held.mediaItems.length} media | ${held.texts.length} text | ${mergeMs}ms`)
   }
 
-  /** Deliver whatever is held, optionally with one more piece of text. */
-  async function deliverBuffered(key, extraText) {
+  /**
+   * Deliver whatever is held, optionally with one more piece of text.
+   *
+   * `messageId` belongs to the message carrying that extra text: it is delivered with
+   * the batch, so it has to be recorded alongside the held items.
+   */
+  async function deliverBuffered(key, extraText, messageId) {
     const held = contentBuffers.get(key)
     if (!held) return
     contentBuffers.delete(key)
@@ -1668,6 +1808,7 @@ export function createChannel(options) {
       mediaItems: held.mediaItems,
       mediaOwnerIds: held.mediaOwnerIds,
       signal: held.signal,
+      messageId,
     })
   }
 
@@ -2386,7 +2527,10 @@ export function createChannel(options) {
       activeSessions: replyTargets.size,
       pendingApprovals: pendingApprovals.size,
       pendingQuestions: pendingQuestions.size,
-      pendingInbound: (readState().pendingInbound || []).length,
+      // From memory, not from the file: a queue that could not be written is still
+      // holding its messages, and this is the only place that shows it.
+      pendingInbound: pendingQueue.length,
+      pendingDropped,
       pendingMerges: contentBuffers.size,
       events: events.slice(-24),
     }

@@ -1,6 +1,6 @@
 {
   "name": "dsh-webot",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "private": true,
   "description": "WeChat channel for DeepSeek Harness: bind WeChat, then drive the agent from your phone.",
   "type": "module",

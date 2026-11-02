@@ -724,20 +724,33 @@ Package name, patch row id and the `client.js` module id must stay equal
 
 ## What a download and a send are allowed to do
 
-**A download URL passes three checks.** The media address comes from `full_url` in the
+**A download URL passes four checks.** The media address comes from `full_url` in the
 gateway response and used to be fetched verbatim.
 
 1. **https** is required;
 2. **loopback, private and link-local addresses are refused** — IPv4 and IPv6 both,
    including IPv4 wrapped inside IPv6 (`::ffff:127.0.0.1`, which the URL parser
    normalises to `::ffff:7f00:1` — the shape the first attempt missed);
-3. **what the name resolves to is checked too**: a public name pointing at `10.x` is
+3. **only WeChat's media domains are allowed**: `*.weixin.qq.com` and `*.qpic.cn`,
+   everything else is refused;
+4. **what the name resolves to is checked too**: a public name pointing at `10.x` is
    refused as well;
-4. **redirects are followed by hand**, and every hop is re-checked the same way — letting
+5. **redirects are followed by hand**, and every hop is re-checked the same way — letting
    `fetch` follow them means the final address never passes a check at all.
 
-Any other public host is allowed: the CDN name is not contractual, and a hard allowlist
-would break downloads silently the day it changes.
+**Why an allowlist, and not just "check where it resolves".** The check and the connection
+are two separate lookups and `fetch` offers no way to pin the address, so the answer can
+change (DNS rebinding). Checking the answer catches a name that points inside from the
+start; **restricting which names may be reached** closes the window — bypassing it would
+mean controlling `weixin.qq.com`'s own DNS.
+
+If the CDN ever lives elsewhere, extend the list:
+
+```bash
+WEBOT_MEDIA_HOSTS=cdn.example.com,media.example.org
+```
+
+(suffix match only, and the resolution check still applies).
 
 ⚠️ **Not solved: DNS rebinding.** The resolution check and the connection are two
 separate lookups, and `fetch` offers no way to pin the address, so the second answer could
@@ -765,12 +778,29 @@ replaying a message, but it also means a message whose handling throws is never 
 again.
 
 So a failing message is retried once in place (with its duplicate guard released); if that
-fails it is written to `pendingInbound` in `state.json` (max 20) and replayed at the next
-start, and three consecutive failures abandon it with a `dropped after N attempts` line.
+fails it is written to `pendingInbound` in `state.json` (max 20, adjustable with
+`WEBOT_PENDING_LIMIT`) and replayed at the next start, and three consecutive failures
+abandon it with a `dropped after N attempts` line.
 
-⚠️ **At-least-once.** A message that was delivered and then threw later may be delivered
-a second time on replay. Between "possibly duplicated" and "possibly lost", this chooses
-the former: a duplicate is visible, a loss is not.
+**The queue never loses a message quietly.** All three ways it could are logged and
+counted:
+
+| Case | Behaviour |
+|---|---|
+| Queue full | drops the oldest, logs `pending queue full (20) \| dropped <id>`, counted in `snapshot().pendingDropped` |
+| State file holds more than the cap | trimmed on load, logs `pending queue over limit … on load` |
+| The state write fails | the message stays in memory, logs `pending write failed … will retry`, retries in 2 s |
+
+**Replays do not run a turn twice.** A delivered message id is recorded in
+`deliveredInbound` (max 200); a replay that finds it drops it with a
+`replay skipped, already delivered` line. So "the agent got the task, something threw
+afterwards" cannot execute the task again.
+
+⚠️ **Remaining boundary**: if the process is killed between submitting the prompt and
+writing `deliveredInbound`, that message is delivered once more after a restart. That is
+the smallest at-least-once window left, and it cannot be removed without a distributed
+transaction.
+
 
 ## Tests
 

@@ -173,19 +173,60 @@ export function setMediaHostResolver(fn) {
 }
 
 /**
+ * Hosts a media download is allowed to reach.
+ *
+ * Tencent serves media from `*.weixin.qq.com`. An allowlist is the only thing that
+ * actually closes DNS rebinding here: `fetch` resolves again at connect time and offers
+ * no way to pin the address, so a name whose answer changes between the check and the
+ * connection would still slip through. Restricting *which* names may be reached removes
+ * that window for anything an attacker can control — rebinding `weixin.qq.com` itself
+ * would require controlling Tencent's DNS.
+ *
+ * `WEBOT_MEDIA_HOSTS` adds suffixes (comma separated) for a deployment whose CDN lives
+ * elsewhere; the same resolution check still applies to those.
+ */
+const DEFAULT_MEDIA_HOST_SUFFIXES = ['weixin.qq.com', 'qpic.cn']
+
+let allowedHostSuffixes = DEFAULT_MEDIA_HOST_SUFFIXES.concat(
+  String(process.env.WEBOT_MEDIA_HOSTS || '')
+    .split(',')
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean),
+)
+
+/** Replace the allowed suffixes. Tests only — production reads the env var once. */
+export function setAllowedMediaHostSuffixes(list) {
+  allowedHostSuffixes = list.map((entry) => String(entry).toLowerCase())
+}
+
+/** Whether a hostname ends with one of the allowed suffixes, on a label boundary. */
+export function isAllowedMediaHost(host) {
+  const name = String(host || '').toLowerCase().replace(/^\[|\]$/g, '')
+  return allowedHostSuffixes.some((suffix) => name === suffix || name.endsWith(`.${suffix}`))
+}
+
+/**
  * `assertSafeMediaUrl`, plus a check of what the name actually resolves to.
  *
- * A public-looking name can point at 127.0.0.1. Resolving and checking every answer
- * closes the obvious form of that. It does not defeat DNS rebinding — the resolver is
- * consulted twice and the second answer could differ — because `fetch` offers no hook to
- * pin the connection to a chosen address. That residual risk is documented rather than
- * papered over: an attacker would already need to control the media URL handed out by
- * Tencent's gateway for this to be reachable at all.
+ * A public-looking name can point at 127.0.0.1, so every answer is checked as well.
+ * Combined with the host allowlist above, that covers both halves of an SSRF: which
+ * names may be reached, and where they point.
+ *
+ * What is still not closed: the resolver is consulted here and again by `fetch` at
+ * connect time (`fetch` has no hook to pin an address). A rebinding answer would need a
+ * name under an allowlisted suffix, i.e. control of Tencent's DNS.
  */
 export async function assertPublicMediaUrl(rawUrl, label = 'CDN') {
   const safe = assertSafeMediaUrl(rawUrl, label)
   const host = new URL(safe).hostname.replace(/^\[|\]$/g, '')
   if (ipBytes(host)) return safe // literal, already checked
+
+  if (!isAllowedMediaHost(host)) {
+    throw new Error(
+      `${label}: 下载主机 ${host} 不在允许列表内（${allowedHostSuffixes.join(', ')}），已拒绝`,
+    )
+  }
+
   let addresses
   try {
     addresses = await resolveHost(host)

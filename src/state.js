@@ -42,6 +42,9 @@ const MAX_PENDING_MESSAGE_BYTES = 32 * 1024
 /** How many sessions may keep a prompt schedule entry. */
 const MAX_PROMPT_MARKS = 50
 
+/** How many delivered message ids are remembered, for replay idempotency. */
+const MAX_DELIVERED_IDS = 200
+
 /** Merge window bounds: zero disables waiting, and the cap keeps it a window. */
 const DEFAULT_MEDIA_MERGE_SEC = 20
 const MAX_MEDIA_MERGE_SEC = 300
@@ -336,6 +339,21 @@ export function normalizeState(raw) {
     }
   }
 
+  // Message ids whose content reached a session.
+  //
+  // The side effect of a message is submitting a prompt; if something throws after that,
+  // the message is queued and replayed. This set is what stops the replay from running
+  // the same turn twice.
+  const deliveredInbound = []
+  if (Array.isArray(source.deliveredInbound)) {
+    for (const entry of source.deliveredInbound) {
+      const id = typeof entry === 'number' ? String(entry) : text(entry, 128)
+      if (!id) continue
+      deliveredInbound.push(id)
+      if (deliveredInbound.length >= MAX_DELIVERED_IDS) break
+    }
+  }
+
   const scenarios = normalizeScenarios(source)
 
   return {
@@ -347,6 +365,7 @@ export function normalizeState(raw) {
     quoteCache,
     pendingInbound,
     promptMarks,
+    deliveredInbound,
     // Where a permission prompt is offered. `phone` claims the request and the
     // desk never sees it; `desktop` delegates and the channel stays out. Anything
     // else — a first run, or a stored 'both' from the withdrawn race mode — is
