@@ -634,6 +634,10 @@ send-media sent image | shot.png | 118473 bytes | cross-session
 的地址；**限制能连哪些域名**才真正关掉那个窗口——要绕过它，攻击者得控制 `weixin.qq.com`
 自己的 DNS。
 
+**解析结果异常时一律拒绝，不放行。** 空数组、非数组、不是 IP 的条目、解析超时——全部按失败
+处理。这一点是必须写下来的：`.find()` 在空数组上返回 `undefined`，等于"检查没发生"，而检查
+没发生却被当成通过，比下载失败严重得多。解析超时默认 5 秒，可用 `WEBOT_DNS_TIMEOUT_MS` 调整。
+
 CDN 域名不在这个列表里的话，用环境变量补：
 
 ```bash
@@ -677,11 +681,13 @@ URL，门槛很高，但我不会说这条已经封死。
 | 写盘失败 | 消息仍在内存里，日志 `pending write failed … will retry`，2 秒后重试写 |
 
 **重复执行有专门的防护。** 投递成功后会把消息 id 写进 `deliveredInbound`（上限 200 条）；
-重放时遇到已投递的 id 直接丢弃并记一行 `replay skipped, already delivered`。这样"agent 已经
-收到任务、后续步骤才抛异常"的消息**不会被执行第二次**。
+重放时遇到已投递的 id 直接丢弃并记一行 `replay skipped, already delivered`。判断发生在
+`handleInbound` 的最前面，所以**当场重试**也不会把同一轮跑第二遍。投递标记写盘失败会记
+`delivered marker not persisted … will retry` 并在 2 秒后重试——这个标记正是重启后不重复执行
+的唯一依据。
 
 ⚠️ **剩下的边界**：投递成功与写入 `deliveredInbound` 之间如果进程被杀，重启后那条消息会被
-再投一次。这是"至少一次"的最小窗口，无法在不引入分布式事务的前提下消除。
+再投一次。写盘重试把窗口缩小到毫秒级，但无法在不引入分布式事务的前提下彻底消除。
 
 ## 测试
 

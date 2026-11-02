@@ -205,12 +205,58 @@ export function isAllowedMediaHost(host) {
   return allowedHostSuffixes.some((suffix) => name === suffix || name.endsWith(`.${suffix}`))
 }
 
+/** How long a media host may take to resolve before the download is refused. */
+const DNS_TIMEOUT_MS = (() => {
+  const raw = Number(process.env.WEBOT_DNS_TIMEOUT_MS)
+  if (Number.isFinite(raw) && raw >= 50) return Math.min(Math.floor(raw), 30_000)
+  return 5000
+})()
+
 /**
- * `assertSafeMediaUrl`, plus a check of what the name actually resolves to.
+ * Resolve a hostname and refuse anything that is not a clean list of public addresses.
  *
- * A public-looking name can point at 127.0.0.1, so every answer is checked as well.
- * Combined with the host allowlist above, that covers both halves of an SSRF: which
- * names may be reached, and where they point.
+ * Fails closed on every abnormal shape, because the alternative is fail-open: an empty
+ * answer used to pass straight through `.find(...) === undefined`, and so did an answer
+ * that was not an address at all. Both mean the check did not happen, which is worse than
+ * a failed download.
+ */
+async function resolvePublicAddresses(host, label) {
+  let timer
+  let addresses
+  try {
+    addresses = await Promise.race([
+      resolveHost(host),
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('解析超时')), DNS_TIMEOUT_MS)
+        if (typeof timer.unref === 'function') timer.unref()
+      }),
+    ])
+  } catch (error) {
+    throw new Error(`${label}: 无法解析下载主机 ${host}（${String((error && error.message) || error)}）`)
+  } finally {
+    clearTimeout(timer)
+  }
+
+  if (!Array.isArray(addresses) || addresses.length === 0) {
+    throw new Error(`${label}: 下载主机 ${host} 没有解析到任何地址，已拒绝`)
+  }
+  for (const address of addresses) {
+    if (typeof address !== 'string' || ipBytes(address) === null) {
+      throw new Error(`${label}: 下载主机 ${host} 返回了无法识别的地址 ${String(address)}，已拒绝`)
+    }
+    if (isPrivateAddress(address)) {
+      throw new Error(`${label}: 下载主机 ${host} 解析到内网地址 ${address}，已拒绝`)
+    }
+  }
+  return addresses
+}
+
+/**
+ * `assertSafeMediaUrl`, plus the host allowlist and a check of what it resolves to.
+ *
+ * A public-looking name can point at 127.0.0.1, so every answer is checked. Combined with
+ * the allowlist above, that covers both halves of an SSRF: which names may be reached,
+ * and where they point.
  *
  * What is still not closed: the resolver is consulted here and again by `fetch` at
  * connect time (`fetch` has no hook to pin an address). A rebinding answer would need a
@@ -227,16 +273,7 @@ export async function assertPublicMediaUrl(rawUrl, label = 'CDN') {
     )
   }
 
-  let addresses
-  try {
-    addresses = await resolveHost(host)
-  } catch (error) {
-    throw new Error(`${label}: 无法解析下载主机 ${host}（${String(error && error.message)}）`)
-  }
-  const blocked = addresses.find((address) => isPrivateAddress(address))
-  if (blocked) {
-    throw new Error(`${label}: 下载主机 ${host} 解析到内网地址 ${blocked}，已拒绝`)
-  }
+  await resolvePublicAddresses(host, label)
   return safe
 }
 

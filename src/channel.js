@@ -29,7 +29,12 @@ import { downloadMedia, extensionForName } from './protocol/media.js'
 import { sendMediaToWeChat } from './protocol/outbound-media.js'
 import { ANCHOR_REMINDER, composeTail } from './persona.js'
 import { PRESENCE_SUPPORTED, atTheDesk, watchDesk } from './presence.js'
-import { activeScenario, appendEventLog, readState, updateState } from './state.js'
+import {
+  activeScenario,
+  appendEventLog,
+  readState as readStateFile,
+  updateState as updateStateFile,
+} from './state.js'
 
 /** Longest slice of one answer sent as a single WeChat message. */
 const MAX_REPLY_CHARS = 1200
@@ -547,6 +552,12 @@ function sessionIdOf(payload) {
 export function createChannel(options) {
   const { sessionController, workspaceDirectory } = options
 
+  // The durable store is injectable so a test can make a write fail on purpose, instead
+  // of depending on file permissions and whichever account the tests run as.
+  const store = (options && options.stateStore) || {}
+  const readState = typeof store.read === 'function' ? store.read : readStateFile
+  const updateState = typeof store.write === 'function' ? store.write : updateStateFile
+
   /** accountId -> AbortController for its poll loop. */
   const loops = new Map()
   /** Inbound message ids already dispatched. */
@@ -772,7 +783,18 @@ export function createChannel(options) {
    */
   const deliveredIds = new Set(readState().deliveredInbound || [])
 
-  /** Record ids that have been delivered, for replay idempotency. */
+  /** Whether the delivered set has changes the file has not taken yet. */
+  let deliveredDirty = false
+  /** Pending retry for a failed delivered-set write. */
+  let deliveredFlushTimer = null
+
+  /**
+   * Record ids that have been delivered, for replay idempotency.
+   *
+   * The in-memory set is the guard; the file is what survives a restart. A failed write
+   * is retried, because losing it is exactly the case where a restart would deliver the
+   * same turn a second time.
+   */
   function markDelivered(ids) {
     const list = (Array.isArray(ids) ? ids : [ids]).map((id) => String(id || '')).filter(Boolean)
     if (list.length === 0) return
@@ -788,11 +810,30 @@ export function createChannel(options) {
       const oldest = deliveredIds.values().next().value
       deliveredIds.delete(oldest)
     }
+    deliveredDirty = true
+    flushDelivered()
+  }
+
+  function flushDelivered() {
+    if (deliveredFlushTimer) {
+      clearTimeout(deliveredFlushTimer)
+      deliveredFlushTimer = null
+    }
+    if (!deliveredDirty) return
     try {
       updateState({ deliveredInbound: [...deliveredIds] })
+      deliveredDirty = false
     } catch (error) {
-      // The in-memory set still protects this process; only a restart could replay.
-      note('inbound', `delivered marker not persisted | ${String((error && error.message) || error).slice(0, 120)}`)
+      // Retried rather than dropped: this marker is the only thing standing between a
+      // restart and a second run of the same turn.
+      note(
+        'inbound',
+        `delivered marker not persisted | ${String((error && error.message) || error).slice(0, 120)} | will retry`,
+      )
+      if (!deliveredFlushTimer) {
+        deliveredFlushTimer = setTimeout(flushDelivered, 2000)
+        if (typeof deliveredFlushTimer.unref === 'function') deliveredFlushTimer.unref()
+      }
     }
   }
 
@@ -1419,6 +1460,18 @@ export function createChannel(options) {
 
     const userId = String(message.from_user_id || '')
     if (!userId) return
+
+    // A message whose turn already ran must not run again — neither on the in-place retry
+    // nor on a replay. This is checked before anything with a side effect, because the
+    // gap it closes is exactly "the prompt went out, then the process or the record did
+    // not finish".
+    {
+      const incoming = String(message.message_id || '')
+      if (incoming && isDelivered(incoming)) {
+        note('inbound', `already delivered, skipped | ${incoming.slice(-12)}`)
+        return
+      }
+    }
 
     const text = textOf(message).trim()
     const mediaItems = mediaItemsOf(message)

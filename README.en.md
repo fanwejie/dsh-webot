@@ -752,6 +752,12 @@ WEBOT_MEDIA_HOSTS=cdn.example.com,media.example.org
 
 (suffix match only, and the resolution check still applies).
 
+**An abnormal resolver answer refuses the download; it never passes.** Empty array, a
+non-array, an entry that is not an address, a timeout — all are failures. This is worth
+stating: `.find()` over an empty array returns `undefined`, which means the check did not
+happen, and a check that did not happen must not be read as a pass. The resolution timeout
+is five seconds by default and can be changed with `WEBOT_DNS_TIMEOUT_MS`.
+
 ⚠️ **Not solved: DNS rebinding.** The resolution check and the connection are two
 separate lookups, and `fetch` offers no way to pin the address, so the second answer could
 differ. Exploiting that requires controlling the media URL Tencent's gateway hands out —
@@ -793,13 +799,15 @@ counted:
 
 **Replays do not run a turn twice.** A delivered message id is recorded in
 `deliveredInbound` (max 200); a replay that finds it drops it with a
-`replay skipped, already delivered` line. So "the agent got the task, something threw
-afterwards" cannot execute the task again.
+`replay skipped, already delivered` line. The check sits at the top of `handleInbound`, so
+the in-place retry cannot run the same turn again either. A failed write of that set logs
+`delivered marker not persisted … will retry` and tries again two seconds later — it is the
+only thing standing between a restart and a second run.
 
 ⚠️ **Remaining boundary**: if the process is killed between submitting the prompt and
-writing `deliveredInbound`, that message is delivered once more after a restart. That is
-the smallest at-least-once window left, and it cannot be removed without a distributed
-transaction.
+writing `deliveredInbound`, that message is delivered once more after a restart. The write
+retry narrows the window to milliseconds, but removing it entirely needs a transaction
+across two systems.
 
 
 ## Tests

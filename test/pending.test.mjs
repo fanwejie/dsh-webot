@@ -49,20 +49,38 @@ function pendingEntry(id, text, attempts = 1) {
  * Build a home folder, write the state, and start a channel against it.
  *
  * `failPrompt` makes delivery throw, which is what puts a message back on the queue.
- * `breakStateFile` puts a directory where state.json belongs, so every state write fails.
+ * `failWrites` injects a store whose writes raise EPERM, which is how a real permission
+ * failure looks — no file modes involved, so the result does not depend on the account
+ * the tests run as or on the filesystem.
  */
-async function withChannel(state, run, { failPrompt = false, breakStateFile = false } = {}) {
+async function withChannel(state, run, { failPrompt = false, failWrites = false } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'webot-queue-'))
   process.env.DSH_HOME = home
   const stateDir = path.join(home, 'webot')
   fs.mkdirSync(stateDir, { recursive: true })
   fs.writeFileSync(path.join(stateDir, 'state.json'), JSON.stringify(baseState(state)), 'utf8')
-  if (breakStateFile) {
-    fs.rmSync(path.join(stateDir, 'state.json'))
-    fs.mkdirSync(path.join(stateDir, 'state.json'))
-  }
 
   const { createChannel } = await import('../src/channel.js')
+  const { readState, updateState } = await import('../src/state.js')
+  const writes = []
+  const store = failWrites
+    ? {
+        read: () => readState(),
+        write: (patch) => {
+          writes.push(Object.keys(patch))
+          const error = new Error('EPERM: operation not permitted, rename')
+          error.code = 'EPERM'
+          throw error
+        },
+      }
+    : {
+        read: () => readState(),
+        write: (patch) => {
+          writes.push(Object.keys(patch))
+          return updateState(patch)
+        },
+      }
+
   const prompts = []
   const channel = createChannel({
     sessionController: {
@@ -75,11 +93,12 @@ async function withChannel(state, run, { failPrompt = false, breakStateFile = fa
       list: async () => ({ items: [] }),
     },
     workspaceDirectory: path.join(home, 'dsh_webot'),
+    stateStore: store,
   })
   const logPath = path.join(stateDir, 'events.log')
   const readLog = () => (fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '')
   try {
-    await run(channel, { home, prompts, stateDir, readLog })
+    await run(channel, { home, prompts, stateDir, readLog, writes })
   } finally {
     channel.stopAll()
     fs.rmSync(home, { recursive: true, force: true })
@@ -144,13 +163,17 @@ test('the queue never grows past its cap, however often it is replayed', async (
 test('a failed state write is logged, and the message is still delivered', async () => {
   await withChannel(
     { pendingInbound: [pendingEntry('w1', '写盘会失败')] },
-    async (channel, { prompts, readLog }) => {
-      // state.json is read-only: reads work, writes fail with EPERM.
-      fs.chmodSync(path.join(process.env.DSH_HOME, 'webot', 'state.json'), 0o444)
+    async (channel, { prompts, readLog, writes }) => {
       await channel.replayPendingInbound()
       assert.equal(prompts.length, 1, 'the message is still delivered')
+      assert.ok(
+        writes.some((keys) => keys.includes('deliveredInbound')),
+        'the write was attempted, so the failure is about the store, not a skipped call',
+      )
       assert.match(readLog(), /delivered marker not persisted/, 'the write failure is reported')
+      assert.match(readLog(), /will retry/, 'and the retry is announced')
     },
+    { failWrites: true },
   )
 })
 
