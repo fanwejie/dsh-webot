@@ -554,6 +554,26 @@ it works, but the selection is wrong.
 
 ### The message cache keeps seven days
 
+### Quoting a picture or a file
+
+Quoting an image is only useful if the agent knows **where the file is**; the word
+"[图片]" gives it nothing to open. The cache therefore keeps where the bytes landed, not
+just the text:
+
+```
+[引用消息] [微信图片] media/inbound/2026-11-02T04-30-11-001Z.jpg（184320 字节）
+[引用消息] [微信语音] 转写：明天下午三点开会
+[引用消息] [微信文件] C:/Users/…/手册.pdf（1113063 字节）
+```
+
+The shape is the same as a normal inbound note, so the agent knows to open it with
+`read_image` or a file tool.
+
+**Files the bot sent** are quotable too: the send acknowledgement carries their id, and
+the path is the one on disk. Note that the gateway never echoes our own sends back
+through `getupdates`, so for a bot-sent message the `sendmessage` acknowledgement is the
+only id there is.
+
 When only an id arrives, the body can come from nowhere but a local cache. Each message
 is kept for **seven days**, then deleted:
 
