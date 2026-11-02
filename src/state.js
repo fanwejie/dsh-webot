@@ -39,6 +39,9 @@ const MAX_PENDING_INBOUND = 20
 /** How large one queued message may be, serialized, before it is dropped. */
 const MAX_PENDING_MESSAGE_BYTES = 32 * 1024
 
+/** How many sessions may keep a prompt schedule entry. */
+const MAX_PROMPT_MARKS = 50
+
 /** Merge window bounds: zero disables waiting, and the cap keeps it a window. */
 const DEFAULT_MEDIA_MERGE_SEC = 20
 const MAX_MEDIA_MERGE_SEC = 300
@@ -315,6 +318,24 @@ export function normalizeState(raw) {
     }
   }
 
+  // sessionId -> how many turns ago the full prompt last went out.
+  //
+  // Persisted so a restart resumes the schedule instead of restarting it: without this,
+  // every boot re-sent the whole note on the next message, which is pure token cost
+  // (the conversation's own transcript still has it).
+  const promptMarks = {}
+  if (source.promptMarks && typeof source.promptMarks === 'object') {
+    for (const [sessionId, mark] of Object.entries(source.promptMarks)) {
+      if (!sessionId || !mark || typeof mark !== 'object') continue
+      const turns = Number(mark.turns)
+      promptMarks[text(sessionId, 128)] = {
+        turns: Number.isFinite(turns) && turns >= 0 ? Math.floor(turns) : 0,
+        text: text(mark.text, 8192),
+      }
+      if (Object.keys(promptMarks).length >= MAX_PROMPT_MARKS) break
+    }
+  }
+
   const scenarios = normalizeScenarios(source)
 
   return {
@@ -325,6 +346,7 @@ export function normalizeState(raw) {
     contextTokens,
     quoteCache,
     pendingInbound,
+    promptMarks,
     // Where a permission prompt is offered. `phone` claims the request and the
     // desk never sees it; `desktop` delegates and the channel stays out. Anything
     // else — a first run, or a stored 'both' from the withdrawn race mode — is

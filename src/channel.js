@@ -590,7 +590,43 @@ export function createChannel(options) {
    * empty map does. Persisting it would suppress the reminder exactly when the
    * process — and its context — just came back.
    */
+  /**
+   * sessionId -> how many turns ago the full prompt last went out.
+   *
+   * Persisted, so a restart no longer re-sends the note. It used to be in-memory on the
+   * theory that a returning process needs its context back, but the conversation keeps
+   * its own history across a restart: the note is still there, and re-sending it every
+   * boot only adds tokens alongside the anchor line that already went out.
+   *
+   * Keyed by session, not by conversation: `/new` starts a session whose context really
+   * is empty, and that one does need the note.
+   */
   const promptMarks = new Map()
+
+  /** Every mark is written through: one state write per turn is already the norm here. */
+  function savePromptMark(sessionId, mark) {
+    promptMarks.set(sessionId, mark)
+    try {
+      updateState({
+        promptMarks: Object.fromEntries(promptMarks),
+      })
+    } catch {
+      /* a failed write costs one extra reminder, never a lost message */
+    }
+  }
+
+  // Hydrate before the first message can be handled, so a restart resumes the schedule
+  // instead of restarting it.
+  {
+    const stored = readState().promptMarks || {}
+    for (const [sessionId, mark] of Object.entries(stored)) {
+      if (!sessionId || !mark || typeof mark !== 'object') continue
+      promptMarks.set(sessionId, {
+        turns: Number(mark.turns) || 0,
+        text: String(mark.text || ''),
+      })
+    }
+  }
   /**
    * sessionId -> generation of the newest "task finished elsewhere" watch.
    *
@@ -1504,7 +1540,7 @@ export function createChannel(options) {
       state.channelPromptEnabled === false
         ? ''
         : composeTail({ channelPrompt: activeScenario(state).content })
-    const tail = takePromptFor(account.accountId, userId, promptText, state)
+    const tail = takePromptFor(sessionId, promptText, state)
     const body = tail ? `${content}\n\n${tail}` : content
 
     // Steer first: a message sent while the agent is working is an interruption,
@@ -1538,17 +1574,21 @@ export function createChannel(options) {
   /**
    * Decide whether this turn carries the full note or only the anchor line.
    *
-   * Two triggers: the turn count (a long working session, where the note drifts far
-   * back in the context) and an edit (the user just changed it and expects it
-   * applied now). A restart empties the map, so the next message re-sends it once.
+   * Three triggers: the first message of a session (its context is empty), the turn
+   * count (a long session, where the note drifts far back), and an edit (the user just
+   * changed it and expects it applied now).
    *
-   * There is deliberately no idle-time trigger. A chat resumed hours later still
-   * has the note earlier in its own transcript, so nothing is lost by counting
-   * turns only — and a clock trigger would re-send on the one occasion the context
-   * is least likely to have dropped it (a short conversation after a pause).
+   * A restart is deliberately *not* a trigger. The schedule lives in the state file, so
+   * a restarted process resumes where it left off; the conversation's own transcript
+   * still contains the note, and re-sending it on every boot only spends tokens.
+   *
+   * There is deliberately no idle-time trigger. A chat resumed hours later still has
+   * the note earlier in its own transcript, so nothing is lost by counting turns only —
+   * and a clock trigger would re-send on the one occasion the context is least likely
+   * to have dropped it (a short conversation after a pause).
    */
-  function takePromptFor(accountId, userId, promptText, state) {
-    const key = `${accountId}:${userId}`
+  function takePromptFor(sessionId, promptText, state) {
+    const key = sessionId
     const mark = promptMarks.get(key)
     const turns = state.promptRefreshTurns || 20
     // Editable, and empty means "off": that is the user's call to make, but the hint
@@ -1556,21 +1596,21 @@ export function createChannel(options) {
     const anchor = state.anchorPrompt === undefined ? ANCHOR_REMINDER : state.anchorPrompt
 
     if (!promptText) {
-      promptMarks.set(key, { turns: 0, text: '' })
+      savePromptMark(key, { turns: 0, text: '' })
       return anchor
     }
 
     const due = !mark || mark.text !== promptText || mark.turns >= turns
 
     if (due) {
-      promptMarks.set(key, { turns: 0, text: promptText })
+      savePromptMark(key, { turns: 0, text: promptText })
       // Not the anchor as well: the note states the rule in its first section, and
       // saying one thing twice is how prompts become noise.
       note('prompt', `full | ${promptText.length} chars | next in ${turns} turns`)
       return promptText
     }
 
-    promptMarks.set(key, { turns: mark.turns + 1, text: mark.text })
+    savePromptMark(key, { turns: mark.turns + 1, text: mark.text })
     note('prompt', `anchor | ${anchor.length} chars | ${mark.turns + 1}/${turns} turns`)
     return anchor
   }
@@ -2324,7 +2364,8 @@ export function createChannel(options) {
     pendingApprovals.clear()
     for (const entry of [...pendingQuestions.values()]) entry.finish({ answers: [] })
     pendingQuestions.clear()
-    // Forget the schedule: a fresh row should introduce itself again.
+    // The schedule is persisted, so unloading just drops the in-memory copy; the next
+    // start hydrates it back and resumes counting instead of starting over.
     promptMarks.clear()
     // Clearing the generations makes in-flight samplers ignore their own results.
     doneNotices.clear()

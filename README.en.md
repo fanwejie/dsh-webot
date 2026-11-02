@@ -311,8 +311,13 @@ that is the one edit here that can quietly reintroduce silent non-replies.
 
 The full note is re-sent on two triggers: the turn count (a long working session,
 where the note drifts far back in the context) and an edit (the user just changed it
-and expects it applied now). A restart empties the tracker in memory, so the next
-message re-sends it once.
+and expects it applied now).
+
+**A restart is not a trigger.** The counter lives in `state.json`, so a restarted process
+resumes counting where it stopped instead of sending the note again — the conversation's
+own transcript still contains it, and re-sending it only spends tokens. Only the first
+message of a **new session** carries the full note, because that session's context really
+is empty.
 
 **No idle-time trigger, on purpose.** A chat resumed hours later still has the note
 earlier in its own transcript, so counting turns loses nothing — and a clock trigger
