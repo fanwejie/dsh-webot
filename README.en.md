@@ -524,6 +524,44 @@ There is no timeout here, unlike approvals. A question has no safe default — t
 call's own `signal` decides when to give up, and an aborted wait answers with empty
 selections.
 
+## Quote replies
+
+Long-press a message in WeChat, choose 引用, and type. On the wire that reply is **two
+items**: the new text, and a second item carrying `ref_msg`. Reading only the text item
+is why a quoted message looked invisible — the agent received "这个改成红色" with no idea
+what 这个 referred to.
+
+The quote is now prefixed to the prompt:
+
+```
+[引用消息] 把标题字体改成蓝色，顺便把字号调大一点
+
+这个改成红色
+```
+
+The quoted body comes from, in order:
+
+| Source | When it exists |
+|---|---|
+| `ref.message_item` | The client sent the whole quoted message — the common case |
+| `partial_text` | The user selected a fragment: located by **nth occurrence** of the boundary strings, verified against `quotemd5` |
+| `ref.title` | The client only sent a summary |
+
+⚠️ The trap: `startindex` / `endindex` in `partial_text` are **occurrence numbers, not
+character offsets**. Treating them as offsets returns the whole message — it looks like
+it works, but the selection is wrong.
+
+With only `svr_id` (the content was not sent along), the prefix says so —
+`[引用消息] （内容没随回复发来，引用 id …）` — instead of inventing content. The upstream
+client resolves that id against a local cache; this plugin keeps no such cache, so it
+states the fact.
+
+**Commands are unaffected**: `/list`, `/switch` and friends still parse from what you
+typed, because the quote only enters the prompt.
+
+Field names and parsing rules come from `@tencent-weixin/openclaw-weixin` (MIT, Tencent),
+including both index readings of `partial_text` and the `quotemd5` check.
+
 ## Media
 
 ### A file waits for the sentence that explains it

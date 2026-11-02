@@ -56,21 +56,124 @@ function sleep(ms, signal) {
   })
 }
 
+/** Text carried by one item: plain text, or a voice note's transcription. */
+function textOfItem(item) {
+  if (!item || typeof item !== 'object') return ''
+  if (item.type === 1 && item.text_item && typeof item.text_item.text === 'string') {
+    return item.text_item.text
+  }
+  // A voice note usually arrives with the service's own transcription; using it
+  // means voice works without any codec, just without word-level fidelity.
+  if (item.type === 3 && item.voice_item && typeof item.voice_item.text === 'string') {
+    return item.voice_item.text
+  }
+  return ''
+}
+
 /** Extract the text of one inbound item list, ignoring anything unsupported yet. */
 function textOf(message) {
   const items = Array.isArray(message.item_list) ? message.item_list : []
   for (const item of items) {
-    if (!item || typeof item !== 'object') continue
-    if (item.type === 1 && item.text_item && typeof item.text_item.text === 'string') {
-      return item.text_item.text
-    }
-    // A voice note usually arrives with the service's own transcription; using it
-    // means voice works without any codec, just without word-level fidelity.
-    if (item.type === 3 && item.voice_item && typeof item.voice_item.text === 'string') {
-      return item.voice_item.text
-    }
+    const text = textOfItem(item)
+    if (text) return text
   }
   return ''
+}
+
+/** A quoted message that was itself a picture or a file has no text to quote. */
+function labelOfItem(item) {
+  if (!item || typeof item !== 'object') return ''
+  const label = MEDIA_ITEM_LABELS.get(item.type)
+  return label ? `[${label}]` : ''
+}
+
+/** Index of the `occurrence`-th match of `value` in `text`, or -1. */
+function nthIndexOf(text, value, occurrence, fromIndex = 0) {
+  if (!value || !Number.isInteger(occurrence) || occurrence < 0) return -1
+  let position = fromIndex
+  for (let current = 0; current <= occurrence; current += 1) {
+    position = text.indexOf(value, position)
+    if (position < 0) return -1
+    if (current < occurrence) position += value.length
+  }
+  return position
+}
+
+/**
+ * The selected part of a quoted message, when the user quoted only a fragment.
+ *
+ * `startindex` / `endindex` are **occurrence numbers, not character offsets**. Reading
+ * them as offsets is what made the first version of this function return the whole
+ * message while looking like it worked. Both readings the client has been observed to
+ * use are tried, and a candidate is verified against `quotemd5` when the payload
+ * carries one — the same approach the upstream client uses (MIT, Tencent).
+ */
+function resolvePartial(fullText, partial) {
+  if (!fullText || !partial || typeof partial !== 'object') return ''
+  const startText = typeof partial.start === 'string' ? partial.start : ''
+  const endText = typeof partial.end === 'string' ? partial.end : ''
+  if (!startText || !endText) return ''
+
+  const build = (relative) => {
+    const start = nthIndexOf(fullText, startText, Number(partial.startindex))
+    if (start < 0) return ''
+    const end = nthIndexOf(
+      fullText,
+      endText,
+      Number(partial.endindex),
+      relative ? start + startText.length : 0,
+    )
+    if (end < start) return ''
+    return fullText.slice(start, end + endText.length)
+  }
+
+  const candidates = [build(false), build(true)].filter(
+    (value, index, all) => value && all.indexOf(value) === index,
+  )
+  if (candidates.length === 0) return ''
+
+  const expected = typeof partial.quotemd5 === 'string' ? partial.quotemd5.trim().toLowerCase() : ''
+  if (!expected) return candidates[0]
+  return (
+    candidates.find(
+      (value) => crypto.createHash('md5').update(value, 'utf8').digest('hex') === expected,
+    ) || ''
+  )
+}
+
+/**
+ * The message being replied to, rendered as a prefix for the prompt.
+ *
+ * WeChat sends a quote reply as an extra item carrying `ref_msg`, not as text inside
+ * the reply. Reading only the text item is why a quoted message looked invisible:
+ * the agent received "这个改成红色" with no idea what 这个 was.
+ *
+ * The quoted body can come from three places, in order of usefulness:
+ *   ref.message_item — the whole quoted message, when the client sends it;
+ *   ref.partial_text — the fragment the user selected, when they quoted only part;
+ *   ref.title        — a short summary, which is all some clients send.
+ * `ref.svr_id` alone means the content was not sent with the reply; there is nothing
+ * local to resolve it against, so that case says so instead of inventing content.
+ */
+export function quotedOf(message) {
+  const items = Array.isArray(message.item_list) ? message.item_list : []
+  const holder = items.find((item) => item && typeof item === 'object' && item.ref_msg)
+  const ref = holder && holder.ref_msg
+  if (!ref || typeof ref !== 'object') return ''
+
+  const quotedItem =
+    ref.message_item && typeof ref.message_item === 'object' ? ref.message_item : null
+  const body = quotedItem ? textOfItem(quotedItem) || labelOfItem(quotedItem) : ''
+  const summary = typeof ref.title === 'string' ? ref.title.trim() : ''
+
+  const selected = resolvePartial(body, ref.partial_text).trim()
+
+  const content = selected || body || summary
+  if (!content) {
+    const id = typeof ref.svr_id === 'string' ? ref.svr_id.trim() : ''
+    return id ? `[引用消息] （内容没随回复发来，引用 id ${id}）` : '[引用消息] （内容没随回复发来）'
+  }
+  return `[引用消息] ${content}`
 }
 
 /** Item types carried into a session, with the label used in the attached note. */
@@ -771,9 +874,18 @@ export function createChannel(options) {
     // is anything to deliver.
     if (!text && mediaItems.length === 0) return
 
+    // A quote reply puts the quoted message in a separate item. Keeping it out of
+    // `text` means commands and approval answers still parse on the raw words, while
+    // the prompt gets the context: "这个改成红色" alone tells the agent nothing.
+    const quoted = quotedOf(message)
+    const promptText = quoted ? (text ? `${quoted}\n\n${text}` : quoted) : text
+
     const messageId = String(message.message_id || '')
     if (remember(messageId)) return
-    note('inbound', `${userId} · ${text.length} chars · ${mediaItems.length} media`)
+    note(
+      'inbound',
+      `${userId} · ${text.length} chars · ${mediaItems.length} media${quoted ? ' · quote' : ''}`,
+    )
 
     // Every inbound message carries a fresh context token. Keeping the newest one
     // on disk is what makes an outbound send possible from a session that never
@@ -860,19 +972,19 @@ export function createChannel(options) {
     if (mediaItems.length > 0) {
       const mergeMs = (readState().mediaMergeSec ?? 20) * 1000
       if (mergeMs > 0) {
-        queueContent(sessionKey, { account, userId, contextToken, text, mediaItems, signal, mergeMs })
+        queueContent(sessionKey, { account, userId, contextToken, text: promptText, mediaItems, signal, mergeMs })
         return
       }
       // Window set to zero: the setting's off switch, delivered with any text it
       // arrived with so a caption still travels with its picture.
-      await deliverToSession({ account, userId, contextToken, texts: [text], mediaItems, signal })
+      await deliverToSession({ account, userId, contextToken, texts: [promptText], mediaItems, signal })
       return
     }
 
     const held = contentBuffers.get(sessionKey)
     if (held) {
       // Text inside the window: the file and the request become one turn.
-      await deliverBuffered(sessionKey, text)
+      await deliverBuffered(sessionKey, promptText)
       return
     }
 
@@ -880,7 +992,7 @@ export function createChannel(options) {
       account,
       userId,
       contextToken,
-      texts: [text],
+      texts: [promptText],
       mediaItems: [],
       signal,
     })
